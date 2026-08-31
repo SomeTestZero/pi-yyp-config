@@ -163,6 +163,21 @@ cmd_pull() {
   echo "   包资源（extensions/skills/prompts/themes）随后运行: pi update --extensions"
 }
 
+# 根据 settings.json 的 packages 列表补装缺失的包
+reinstall_packages() {
+  if ! command -v pi >/dev/null 2>&1; then
+    echo "⚠️ 未找到 pi 命令，跳过包补装。安装 pi 后手动执行: pi install <包名>"
+    return 0
+  fi
+  echo "按 packages 清单补装包..."
+  while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    echo "  pi install $pkg"
+    pi install "$pkg" >/dev/null 2>&1 \
+      || echo "  ⚠️ $pkg 安装失败，请手动执行: pi install $pkg"
+  done < <(node -e "try{const s=require(process.env.HOME+'/.pi/agent/settings.json');(s.packages||[]).forEach(p=>console.log(p))}catch(e){}" 2>/dev/null)
+}
+
 cmd_status() {
   need_repo
   echo "── 仓库状态 ──────────────────────────────"
@@ -186,6 +201,7 @@ cmd_status() {
 cmd_restore() {
   need_repo
   cmd_pull
+  reinstall_packages
   echo
   echo "🎉 新机器初始化完成！清单:"
   echo "   1. settings.json 里的 packages 已随配置还原（含本包）"

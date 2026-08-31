@@ -18,7 +18,8 @@ git clone git@github.com:SomeTestZero/pi-yyp-config ~/.pi/agent/git/github.com/S
 bash ~/.pi/agent/git/github.com/SomeTestZero/pi-yyp-config/scripts/pi-sync restore
 ```
 
-`restore` 会克隆仓库、还原 `~/.pi` 下的配置文件（覆盖前自动备份为 `*.bak-时间戳`）。
+`restore` 会克隆仓库、还原 `~/.pi` 下的配置文件（覆盖前自动备份为 `*.bak-时间戳`），
+并按 settings.json 里的 packages 清单自动补装缺失的包（pi-web-access 等）。
 settings.json 中的 `packages` 列表随配置一起还原，重启 pi 即加载本包。
 
 ## 日常使用
