@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# pi-sync —— 把 pi 配置同步到 GitHub（默认仓库: SomeTestZero/pi-yyp-config）
+#
+# 用法:
+#   pi-sync save      本机配置 -> 仓库（导出配置 + 提交 + 推送，含扩展改动）
+#   pi-sync pull      仓库 -> 本机（还原配置，覆盖前自动备份）
+#   pi-sync status    对比本机配置与仓库配置的差异
+#   pi-sync restore   新机器一键初始化（克隆仓库 + 还原配置）
+#
+# 选项:
+#   --with-auth       额外同步 auth.json（含 API 凭证，仅限私有仓库！）
+#
+# 环境变量:
+#   PI_SYNC_SLUG      仓库 slug，默认 SomeTestZero/pi-yyp-config
+#   PI_SYNC_REPO      仓库本地路径，默认 ~/.pi/agent/git/github.com/<slug>
+#
+# 默认同步的文件:
+#   ~/.pi/agent/settings.json      全局设置（含 packages 列表）
+#   ~/.pi/agent/keybindings.json   键位绑定
+#   ~/.pi/web-search.json          web-search 配置
+#
+# 永不同步（敏感或与机器绑定）:
+#   auth.json（除非 --with-auth）、trust.json、sessions/、
+#   models-store.json（缓存）、npm/、git/、web-search-cache/
+
+set -euo pipefail
+
+usage() {
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+die() { echo "错误: $*" >&2; exit 1; }
+
+SLUG="${PI_SYNC_SLUG:-SomeTestZero/pi-yyp-config}"
+PKG_DIR="${PI_SYNC_REPO:-$HOME/.pi/agent/git/github.com/$SLUG}"
+PI_DIR="$HOME/.pi"
+AGENT_DIR="$PI_DIR/agent"
+CONFIG_DIR="$PKG_DIR/config"
+TS="$(date +%Y%m%d-%H%M%S)"
+
+WITH_AUTH=0
+CMD=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --with-auth) WITH_AUTH=1 ;;
+    save|pull|status|restore) CMD="$arg" ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数: $arg"; usage; exit 1 ;;
+  esac
+done
+
+# ---------- 仓库定位 / 克隆 ----------
+
+need_repo() {
+  if [[ ! -d "$PKG_DIR/.git" ]]; then
+    echo "未找到本地仓库 $PKG_DIR，开始克隆..."
+    mkdir -p "$(dirname "$PKG_DIR")"
+    if ! git clone "git@github.com:$SLUG.git" "$PKG_DIR" 2>/dev/null; then
+      echo "SSH 克隆失败，尝试 HTTPS..."
+      git clone "https://github.com/$SLUG.git" "$PKG_DIR"
+    fi
+  fi
+}
+
+# ---------- 敏感信息扫描 ----------
+
+scan_secrets() {
+  local hits
+  hits="$(grep -REin '"(apiKey|api_key|token|secret|password)"[[:space:]]*:' \
+            "$CONFIG_DIR" 2>/dev/null || true)"
+  if [[ -n "$hits" ]]; then
+    echo "⚠️  检测到疑似密钥字段，请确认仓库为私有且确有必要同步:"
+    echo "$hits" | sed 's/^/    /'
+  fi
+}
+
+# ---------- 子命令 ----------
+
+cmd_save() {
+  need_repo
+  mkdir -p "$CONFIG_DIR/pi/agent"
+
+  # 导出配置文件（仓库内目录结构镜像 ~/.pi 布局）
+  for f in settings.json keybindings.json; do
+    [[ -f "$AGENT_DIR/$f" ]] && cp -p "$AGENT_DIR/$f" "$CONFIG_DIR/pi/agent/$f"
+  done
+  for f in web-search.json; do
+    [[ -f "$PI_DIR/$f" ]] && cp -p "$PI_DIR/$f" "$CONFIG_DIR/pi/$f"
+  done
+
+  if [[ $WITH_AUTH -eq 1 ]]; then
+    echo "⚠️  auth.json 包含 API 凭证，请务必确认这是私有仓库！"
+    cp -p "$AGENT_DIR/auth.json" "$CONFIG_DIR/pi/agent/auth.json"
+  else
+    # 之前若同步过 auth.json，现在移除，避免残留泄露
+    rm -f "$CONFIG_DIR/pi/agent/auth.json"
+  fi
+
+  scan_secrets
+
+  # 连扩展/技能的改动一起提交（本仓库就是唯一事实来源）
+  git -C "$PKG_DIR" add -A
+  if git -C "$PKG_DIR" diff --cached --quiet 2>/dev/null; then
+    echo "配置无变化。"
+  else
+    git -C "$PKG_DIR" commit -m "pi-sync save $TS"
+    git -C "$PKG_DIR" log --oneline -1
+  fi
+
+  if git -C "$PKG_DIR" push 2>&1; then
+    echo "✅ 已推送到 GitHub: $SLUG"
+  else
+    echo "❌ 推送失败（网络 / SSH key / 无权限?），本地提交已保留，稍后可手动 git push。" >&2
+    exit 1
+  fi
+}
+
+cmd_pull() {
+  need_repo
+  git -C "$PKG_DIR" fetch origin
+
+  # 有本地未提交改动时先 stash，拉完再恢复
+  stashed=0
+  if [[ -n "$(git -C "$PKG_DIR" status --porcelain)" ]]; then
+    git -C "$PKG_DIR" stash push -u -m "pi-sync auto stash $TS"
+    stashed=1
+    echo "本地有未提交改动，已自动 stash。"
+  fi
+
+  if git -C "$PKG_DIR" pull --ff-only 2>&1; then
+    :
+  else
+    [[ $stashed -eq 1 ]] && git -C "$PKG_DIR" stash pop
+    die "拉取失败（本地提交与远端分叉?）。可先运行 pi-sync save 合并后再试。"
+  fi
+  [[ $stashed -eq 1 ]] && git -C "$PKG_DIR" stash pop
+
+  # 还原配置，覆盖前备份
+  backup_and_copy() { # $1=源  $2=目标
+    [[ -f "$1" ]] || return 0
+    if [[ -f "$2" ]] && cmp -s "$1" "$2"; then
+      return 0   # 内容相同，跳过
+    fi
+    if [[ -f "$2" ]]; then
+      cp -p "$2" "$2.bak-$TS"
+    fi
+    mkdir -p "$(dirname "$2")"
+    cp -p "$1" "$2"
+    echo "  已还原: $2"
+  }
+
+  echo "从仓库还原配置:"
+  backup_and_copy "$CONFIG_DIR/pi/agent/settings.json"    "$AGENT_DIR/settings.json"
+  backup_and_copy "$CONFIG_DIR/pi/agent/keybindings.json" "$AGENT_DIR/keybindings.json"
+  backup_and_copy "$CONFIG_DIR/pi/web-search.json"        "$PI_DIR/web-search.json"
+
+  if [[ $WITH_AUTH -eq 1 ]]; then
+    backup_and_copy "$CONFIG_DIR/pi/agent/auth.json" "$AGENT_DIR/auth.json"
+  fi
+
+  echo "✅ 完成。重启 pi 或在会话内执行 /reload 生效。"
+  echo "   包资源（extensions/skills/prompts/themes）随后运行: pi update --extensions"
+}
+
+cmd_status() {
+  need_repo
+  echo "── 仓库状态 ──────────────────────────────"
+  git -C "$PKG_DIR" status -sb
+  echo
+  echo "── 配置差异（本机 vs 仓库） ───────────────"
+  diff_file() { # $1=本机  $2=仓库
+    if [[ ! -f "$2" ]]; then echo "  仅本机存在: $1"
+    elif ! cmp -s "$1" "$2"; then echo "  有差异  : $1"
+    else echo "  一致    : $1"; fi
+  }
+  diff_file "$AGENT_DIR/settings.json"    "$CONFIG_DIR/pi/agent/settings.json"
+  diff_file "$AGENT_DIR/keybindings.json" "$CONFIG_DIR/pi/agent/keybindings.json"
+  diff_file "$PI_DIR/web-search.json"     "$CONFIG_DIR/pi/web-search.json"
+  if [[ -f "$CONFIG_DIR/pi/agent/auth.json" ]]; then
+    diff_file "$AGENT_DIR/auth.json" "$CONFIG_DIR/pi/agent/auth.json"
+    echo "  ⚠️  auth.json 在仓库中，请确认仓库为私有"
+  fi
+}
+
+cmd_restore() {
+  need_repo
+  cmd_pull
+  echo
+  echo "🎉 新机器初始化完成！清单:"
+  echo "   1. settings.json 里的 packages 已随配置还原（含本包）"
+  echo "   2. 运行 pi update --extensions 拉齐包资源"
+  echo "   3. auth.json 默认不同步 —— 在新机器上运行 pi 登录，"
+  echo "      或在私有仓库场景下使用: pi-sync pull --with-auth"
+}
+
+case "$CMD" in
+  save)    cmd_save ;;
+  pull)    cmd_pull ;;
+  status)  cmd_status ;;
+  restore) cmd_restore ;;
+  *) usage; exit 1 ;;
+esac

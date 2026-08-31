@@ -1,0 +1,15 @@
+{
+  "defaultThinkingLevel": "max",
+  "hideThinkingBlock": false,
+  "lastChangelogVersion": "0.84.4",
+  "packages": [
+    "npm:pi-web-access",
+    "git:github.com/SomeTestZero/pi-agents-md-tracker",
+    "git:git@github.com:SomeTestZero/pi-yyp-config",
+    "git:github.com/SomeTestZero/pi-volcengine-plans"
+  ],
+  "theme": "dark",
+  "tuiMode": "fullscreen",
+  "defaultProvider": "volcengine-plan",
+  "defaultModel": "glm-5.3-flash"
+}
