@@ -869,6 +869,15 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   const treePath = path.join(workDir(), REPO_SETTINGS);
   const tree = (readJson(treePath) ?? {}) as Side;
 
+  // 清除树中的排除键（脚本时代遗留的 lastChangelogVersion 等）
+  for (const k of Object.keys(tree)) {
+    if (excluded.has(k)) {
+      delete tree[k];
+      changed = true;
+      notes.push(`-${k}（排除键，停止跟踪）`);
+    }
+  }
+
   const keys = new Set([...Object.keys(live), ...Object.keys(tree)]);
   for (const k of keys) {
     if (excluded.has(k) || k === "packages") continue;
@@ -963,7 +972,11 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
     }
   }
 
-  state.machines[machine] = { lastSeen: new Date().toISOString() };
+  // lastSeen 仅在有实际改动或超过 6 小时未记录时更新，避免每次退出都产生空提交
+  const prevSeen = Date.parse(state.machines[machine]?.lastSeen ?? "") || 0;
+  if (changed || now - prevSeen > 6 * 3600_000) {
+    state.machines[machine] = { lastSeen: new Date().toISOString() };
+  }
   return { changed, notes };
 }
 
