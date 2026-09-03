@@ -25,6 +25,10 @@
 
 set -euo pipefail
 
+echo "⚠️  scripts/pi-sync 已废弃：请改用 pi 内的 /sync 命令（pi-sync 扩展，含自动同步与合并）。" >&2
+echo "   本脚本保留一个版本周期后移除。" >&2
+sleep 2
+
 usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
 }

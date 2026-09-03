@@ -1,6 +1,6 @@
 {
   "name": "pi-yyp-config",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "yyp's personal pi config: extensions, skills, prompts, themes",
   "keywords": ["pi-package"],
   "license": "MIT",
