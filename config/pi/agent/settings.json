@@ -3,10 +3,11 @@
   "hideThinkingBlock": false,
   "lastChangelogVersion": "0.84.4",
   "packages": [
-    "npm:pi-web-access",
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
+    "git:git@github.com:SomeTestZero/pi-token-speed",
+    "git:github.com/SomeTestZero/pi-volcengine-plans",
     "git:git@github.com:SomeTestZero/pi-yyp-config",
-    "git:github.com/SomeTestZero/pi-volcengine-plans"
+    "npm:pi-web-access"
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",

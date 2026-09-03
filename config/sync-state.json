@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "machines": {
+    "yyp-home-pc": {
+      "lastSeen": "2026-09-03T11:07:24.057Z"
+    }
+  },
+  "settings": {},
+  "packages": {
+    "git:github.com/sometestzero/pi-token-speed": {
+      "ts": 1788433644050,
+      "machine": "yyp-home-pc"
+    }
+  },
+  "files": {},
+  "tombstones": []
+}
