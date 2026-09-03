@@ -927,9 +927,9 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   const liveFiles = collectLiveFiles(cfg);
   const treeFiles = collectTreeFiles(cfg);
   // web-search.json 未显式启用时停止跟踪（脚本时代遗留，可能含 API key）
-  if (!cfg.includeFiles.includes("web-search.json") && treeFiles.has(REPO_WEBSEARCH)) {
-    fs.unlinkSync(treeFiles.get(REPO_WEBSEARCH)!);
-    treeFiles.delete(REPO_WEBSEARCH);
+  const wsAbs = path.join(workDir(), REPO_WEBSEARCH);
+  if (!cfg.includeFiles.includes("web-search.json") && fs.existsSync(wsAbs)) {
+    fs.unlinkSync(wsAbs);
     delete state.files[REPO_WEBSEARCH];
     changed = true;
     notes.push(`-文件 ${REPO_WEBSEARCH}（停止跟踪）`);
