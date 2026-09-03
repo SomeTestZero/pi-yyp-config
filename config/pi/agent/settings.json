@@ -1,7 +1,6 @@
 {
   "defaultThinkingLevel": "max",
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "0.84.4",
   "packages": [
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
     "git:git@github.com:SomeTestZero/pi-token-speed",
