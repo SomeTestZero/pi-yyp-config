@@ -963,7 +963,11 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
     }
   }
 
-  state.machines[machine] = { lastSeen: new Date().toISOString() };
+  // 心跳仅在确有改动时更新：否则每次同步都会刷新 lastSeen 使 sync-state.json 变脏，
+  // 产生空提交并推远端 → pi 的包更新检查会对本仓库误报 "Package updates are available"
+  if (changed) {
+    state.machines[machine] = { lastSeen: new Date().toISOString() };
+  }
   return { changed, notes };
 }
 
@@ -1339,11 +1343,14 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     const prevLive = (readJson(liveSettingsPath()) ?? {}) as Side;
     const prevLivePackages = Array.isArray(prevLive.packages) ? (prevLive.packages as unknown[]) : [];
 
-    // phase1：本机改动 -> 工作克隆（phase1 就地修改 state1，随后落盘）
+    // phase1：本机改动 -> 工作克隆（phase1 就地修改 state1；仅在确有改动时落盘并提交，
+    // 避免空跑产生心跳提交推远端，导致 pi 包更新检查对本仓库误报）
     const state1 = (readJson(path.join(workDir(), REPO_STATE)) as SyncState | null) ?? emptyState();
     const p1 = phase1(cfg, state1, pending);
-    writeJson(path.join(workDir(), REPO_STATE), state1);
-    await commitIfDirty(`pi-sync: update from ${cfg.machineId}`);
+    if (p1.changed) {
+      writeJson(path.join(workDir(), REPO_STATE), state1);
+      await commitIfDirty(`pi-sync: update from ${cfg.machineId}`);
+    }
     if (p1.notes.length) result.notes.push(`本机改动 ${p1.notes.length} 项`);
 
     // phase2：远端 -> 工作克隆
