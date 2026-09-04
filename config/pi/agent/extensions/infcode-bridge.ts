@@ -1,11 +1,9 @@
 /**
- * InfCode Bridge for pi — v3
+ * InfCode Bridge for pi — v4
  * 目标: 让 pi 使用 InfCode(VSCode插件) 的企业模型与额度。
  *
- * v3 变更:
- *  - 内置按模型调研的准确参数表 (1M 上下文 / 思考强度映射)
- *  - 转储网关 /models 返回的完整元数据到报告 (用于后续校准)
- *  - 写入 models.json 时优先使用网关元数据, 回退到内置参数表
+ * v4 变更: 流式输出探测 (诊断 thinking 泄漏/重复), 每版本自动跑一次
+ * v3 变更: 内置按网关元数据校准的参数表; 转储 /models 完整元数据
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createProvider, openAICompletionsApi } from "@earendil-works/pi-ai";
@@ -14,13 +12,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 
-const BRIDGE_VERSION = "3.0";
+const BRIDGE_VERSION = "4.0";
 const HOME = os.homedir();
 const REPORT = path.join(HOME, ".infcode", "pi-report.txt");
 const AUTH = path.join(HOME, ".infcode", "auth.json");
 const MODELS_JSON = path.join(HOME, ".pi", "agent", "models.json");
+const GATEWAY_BASE = "https://www.tokensinfinity.com/acode/v1";
 
-// 调研 + 网关元数据所得的模型参数 (网关 /models 无元数据时使用)
+// 网关元数据校准的参数 (网关 /models 无元数据时使用)
 // 网关声明: context_length 1M; reasoning_efforts 仅 glm-5.2/kimi-k3 支持 (minimal~xhigh)
 const MODEL_DEFAULTS: Record<string, any> = {
   GL56: { contextWindow: 1000000, maxTokens: 128000, reasoning: false, input: ["text", "image"] },
@@ -170,7 +169,6 @@ async function probeOne(url: string, token: string, headerStyle: "bearer" | "x-a
     await log(`probe GET ${url} [${headerStyle}] -> HTTP ${r.status}`);
     if (!r.ok) return null;
     const j: any = await r.json();
-    // 完整转储元数据供校准
     await log(`RAW /models response:\n${JSON.stringify(j).slice(0, 8000)}`);
     const data: any[] = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
     const models = data.map((m: any) => m?.id).filter((x: any) => typeof x === "string" && x.length > 0);
@@ -224,6 +222,50 @@ async function cliListModels(exe: string): Promise<string[]> {
     if (ids.size) break;
   }
   return [...ids].filter((x) => !/^(acode|kilo|infcode|usage|cost|token|provider|model)$/i.test(x));
+}
+
+// ---------------- 流式输出探测 (诊断 thinking 泄漏/重复) ----------------
+async function runStreamProbes(baseUrl: string, token: string, modelIds: string[]) {
+  sectionLog("STREAM PROBES");
+  const endpoint = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const mk = (model: string, extra?: any) => ({
+    model,
+    messages: [{ role: "user", content: "hi" }],
+    stream: true,
+    max_tokens: 16,
+    ...extra,
+  });
+  const variants: Array<[string, any]> = [
+    ["plain", {}],
+    ["reasoning_effort:high", { reasoning_effort: "high" }],
+    ["thinking.enabled", { thinking: { type: "enabled" } }],
+  ];
+  for (const id of modelIds) {
+    for (const [label, extra] of variants) {
+      try {
+        const r = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(mk(id, extra)),
+          signal: AbortSignal.timeout(30000),
+        });
+        await log(`\n### ${id} [${label}] HTTP ${r.status}`);
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          await log("  BODY: " + t.slice(0, 600));
+          continue;
+        }
+        const text = await r.text();
+        const lines = text.split(/\r?\n/).filter((l) => l.startsWith("data:"));
+        await log(`  SSE lines=${lines.length}`);
+        await log("  RAW(前3500字符):\n" + text.slice(0, 3500));
+      } catch (e) {
+        await log(`### ${id} [${label}] ERR ${(e as Error).message}`);
+      }
+    }
+  }
+  sectionLog("STREAM PROBES END");
 }
 
 // ---------------- 注册 provider / 写 models.json ----------------
@@ -326,7 +368,7 @@ export default function (pi: ExtensionAPI) {
           else candidates.push(uu.origin);
         } catch {}
       }
-      candidates.push("https://www.tokensinfinity.com/acode/v1");
+      candidates.push(GATEWAY_BASE);
       candidates.push("https://www.tokensinfinity.com");
       if (auth.baseUrl) candidates.push(auth.baseUrl.replace(/\/+$/, ""));
       await log("候选网关 base: " + [...new Set(candidates)].join(" | "));
@@ -340,7 +382,7 @@ export default function (pi: ExtensionAPI) {
       if (!found && cli) {
         const ids = await cliListModels(cli.exe);
         if (ids.length) {
-          found = { endpoint: "https://www.tokensinfinity.com/acode/v1/models", models: ids };
+          found = { endpoint: GATEWAY_BASE + "/models", models: ids };
           await log("!! 兜底成功: 用 CLI models 命令拿到 " + ids.length + " 个模型");
         }
       }
@@ -381,6 +423,15 @@ export default function (pi: ExtensionAPI) {
           found.models.map((id) => ({ id, meta: metaMap.get(id) }))
         );
         await log("已写入 " + MODELS_JSON);
+        // 首次自动流式探测 (诊断 thinking 泄漏/重复; 每版本仅一次, 可用 /infcode-stream-test 重跑)
+        try {
+          const probedFlag = path.join(HOME, ".infcode", "pi-stream-probed.txt");
+          const flag = await fsp.readFile(probedFlag, "utf8").catch(() => "");
+          if (flag.trim() !== BRIDGE_VERSION) {
+            await fsp.writeFile(probedFlag, BRIDGE_VERSION, "utf8");
+            await runStreamProbes(baseUrl, auth.accessToken, found.models);
+          }
+        } catch {}
         sectionLog("DONE");
         done = true;
       } else {
@@ -401,6 +452,28 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`InfCode Bridge 报告: ${REPORT}\n${t.slice(-800)}`, "info");
       } catch {
         ctx.ui.notify(`InfCode Bridge 报告: ${REPORT}`, "info");
+      }
+    },
+  });
+
+  pi.registerCommand("infcode-stream-test", {
+    description: "InfCode Bridge: 流式输出探测 (诊断思考内容泄漏)",
+    handler: async (_args, ctx) => {
+      await runDiscovery(true);
+      try {
+        const auth = await readAuth();
+        if (!auth) throw new Error("无 auth.json");
+        await runStreamProbes(GATEWAY_BASE, auth.accessToken, [
+          "GL56",
+          "deepseek-v4-flash",
+          "deepseek-v4-pro",
+          "glm-5.2",
+          "kimi-k3",
+        ]);
+        const t = await fsp.readFile(REPORT, "utf8");
+        ctx.ui.notify(`流式探测完成: ${REPORT}\n${t.slice(-1200)}`, "info");
+      } catch (e) {
+        ctx.ui.notify("流式探测失败: " + (e as Error).message, "error");
       }
     },
   });
