@@ -5,7 +5,7 @@
       "lastSeen": "2026-09-04T01:40:35.663Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-09-04T05:26:02.226Z"
+      "lastSeen": "2026-09-04T06:51:18.511Z"
     }
   },
   "settings": {},
@@ -13,17 +13,24 @@
     "git:github.com/sometestzero/pi-token-speed": {
       "ts": 1788433644050,
       "machine": "yyp-home-pc"
+    },
+    "git:github.com/sometestzero/pi-infcode-bridge": {
+      "ts": 1788504678499,
+      "machine": "NEU-20230908KJS"
     }
   },
   "files": {
     "config/pi/agent/extensions/llm-gateway.ts": {
       "ts": 1788486686457,
       "machine": "NEU-20230908KJS"
-    },
-    "config/pi/agent/extensions/infcode-bridge.ts": {
-      "ts": 1788496286868,
-      "machine": "NEU-20230908KJS"
     }
   },
-  "tombstones": []
+  "tombstones": [
+    {
+      "type": "file",
+      "id": "config/pi/agent/extensions/infcode-bridge.ts",
+      "ts": 1788504678499,
+      "machine": "NEU-20230908KJS"
+    }
+  ]
 }
