@@ -3,6 +3,9 @@
   "machines": {
     "yyp-home-pc": {
       "lastSeen": "2026-09-04T01:40:35.663Z"
+    },
+    "NEU-20230908KJS": {
+      "lastSeen": "2026-09-04T01:51:26.463Z"
     }
   },
   "settings": {},
@@ -12,6 +15,11 @@
       "machine": "yyp-home-pc"
     }
   },
-  "files": {},
+  "files": {
+    "config/pi/agent/extensions/llm-gateway.ts": {
+      "ts": 1788486686457,
+      "machine": "NEU-20230908KJS"
+    }
+  },
   "tombstones": []
 }
