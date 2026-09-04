@@ -15,6 +15,10 @@
  *     不再写 models.json (文档: models.json 覆盖优先级高于原生注册, 会盖住新 compat),
  *     启动时自动清除 v4 写入的旧 models.json infcode 节。
  *  4) 重型诊断 (CLI 扫描/进程扫描/日志挖掘) 不再每次启动跑, 仅 /infcode-status 按需运行。
+ *  5) v5.1: 修复思考块显示在正文下方 —— 网关在同一 chunk 内先给 content 再给
+ *     reasoning_content, 内置解析器先建 text block (index 0) 再建 thinking block (index 1),
+ *     TUI 按下标渲染就反了。现延迟转发 text_start (等首个真实文本增量),
+ *     并在两块并存时就地交换 partial.content 使 thinking 排在 text 前。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -36,7 +40,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 
-const BRIDGE_VERSION = "5.0";
+const BRIDGE_VERSION = "5.1";
 const PROVIDER_ID = "infcode";
 const HOME = os.homedir();
 const REPORT = path.join(HOME, ".infcode", "pi-report.txt");
@@ -172,95 +176,162 @@ function emptyUsage() {
 
 /**
  * 包装内置 openai-completions 事件流:
+ *  - text_start 延迟转发 (等首个真实文本增量), 保证 thinking 块先到 UI;
  *  - text_delta 先押后一拍, 若与同一 chunk 的 thinking delta 重复则吞掉;
  *  - 每个 text block 维护 raw(原始拼接)→clean(剥离 <thinking> 区段), 只转发 clean 的增量;
+ *  - text/thinking 两块并存时就地交换, 使 thinking 在 text 前 (修复思考显示在正文下方);
  *  - 所有携带 partial 的事件在转发前就地净化其中的 text block (TUI 直接渲染 partial);
- *  - thinking / toolcall / usage / done / error 事件原样透传。
+ *  - thinking / toolcall / usage / done / error 事件透传 (按块引用重排下标)。
  */
 function sanitizeEventStream(inner: AssistantMessageEventStream, model: Model<any>): AssistantMessageEventStream {
   const out = createAssistantMessageEventStream();
   (async () => {
-    const texts = new Map<number, { raw: string; clean: string }>();
-    let held: { index: number; delta: string } | null = null;
+    type TextState = { raw: string; clean: string };
+    const texts = new Map<any, TextState>();
+    let textBlock: any = null; // 内置解析器创建的 text block (对象引用, 用于跨下标追踪)
+    let thinkingBlock: any = null; // 内置解析器创建的 thinking block
+    let textStartSent = false;
+    let held: string | null = null; // 押后的 text_delta 文本 (等待判重)
 
-    const stateFor = (i: number) => {
-      let s = texts.get(i);
+    const stateFor = (block: any): TextState => {
+      let s = texts.get(block);
       if (!s) {
         s = { raw: "", clean: "" };
-        texts.set(i, s);
+        texts.set(block, s);
       }
       return s;
+    };
+
+    const indexOfBlock = (partial: AssistantMessage | undefined, block: any): number => {
+      const content = (partial as any)?.content;
+      return Array.isArray(content) && block ? content.indexOf(block) : -1;
+    };
+
+    // 就地交换 thinking 到 text 前。内置流每个事件都重新 indexOf 计算下标,
+    // 因此交换后它后续事件自动携带正确下标。
+    const ensureThinkingFirst = (partial: AssistantMessage | undefined) => {
+      const content = (partial as any)?.content;
+      if (!Array.isArray(content) || !textBlock || !thinkingBlock) return;
+      const ti = content.indexOf(textBlock);
+      const gi = content.indexOf(thinkingBlock);
+      if (ti !== -1 && gi !== -1 && ti < gi) {
+        content[ti] = thinkingBlock;
+        content[gi] = textBlock;
+      }
     };
 
     const sanitizePartial = (msg: AssistantMessage | undefined) => {
       const content = (msg as any)?.content;
       if (!Array.isArray(content)) return;
-      for (let i = 0; i < content.length; i++) {
-        const b = content[i];
+      for (const b of content) {
         if (b && b.type === "text" && typeof b.text === "string") {
-          const s = texts.get(i);
+          const s = texts.get(b);
           b.text = s ? s.clean : stripThinkingTags(b.text, true);
         }
       }
     };
 
-    // 把押后的 text_delta 结算掉; 返回需要补发的 text_delta (无增量则 null)
-    const flushHeld = (partial: AssistantMessage): AssistantMessageEvent | null => {
-      if (!held) return null;
-      const s = stateFor(held.index);
-      s.raw += held.delta;
+    // 结算押后的 text_delta; 有可见增量时补发 text_start (首次) + text_delta
+    const flushHeld = (partial: AssistantMessage | undefined) => {
+      if (held == null) return;
+      const delta = held;
+      held = null;
+      if (!textBlock) return;
+      const s = stateFor(textBlock);
+      s.raw += delta;
       const next = stripThinkingTags(s.raw);
       const growth = next.startsWith(s.clean) ? next.slice(s.clean.length) : "";
       s.clean = next;
-      const index = held.index;
-      held = null;
-      sanitizePartial(partial); // 先净化再发, 避免 TUI 瞬间渲染到原始污染文本
-      if (growth.length === 0) return null;
-      return { type: "text_delta", contentIndex: index, delta: growth, partial };
+      ensureThinkingFirst(partial);
+      sanitizePartial(partial);
+      if (!growth || !partial) return;
+      const ti = indexOfBlock(partial, textBlock);
+      if (ti === -1) return;
+      if (!textStartSent) {
+        out.push({ type: "text_start", contentIndex: ti, partial });
+        textStartSent = true;
+      }
+      out.push({ type: "text_delta", contentIndex: ti, delta: growth, partial });
     };
 
     try {
       for await (const ev of inner) {
-        if (ev.type === "text_delta") {
-          // 先押后: 等看下一个事件是不是同一 chunk 的 thinking_delta (网关双发)
-          if (held) {
-            const f = flushHeld(ev.partial);
-            if (f) out.push(f);
+        switch (ev.type) {
+          case "text_start": {
+            textBlock = (ev.partial as any).content?.[ev.contentIndex] ?? textBlock;
+            if (textBlock) stateFor(textBlock);
+            break; // 不转发: 等首个真实文本增量时再发 (见 flushHeld)
           }
-          held = { index: ev.contentIndex, delta: ev.delta };
-          continue;
-        }
-        if (ev.type === "thinking_delta") {
-          if (held) {
-            if (!isDuplicateOfThinking(held.delta, ev.delta)) {
-              const f = flushHeld(ev.partial);
-              if (f) out.push(f);
-            } else {
-              held = null; // content 字段里的思考副本, 吞掉
+          case "text_delta": {
+            if (held != null) flushHeld(ev.partial);
+            held = ev.delta; // 押后: 看下一事件是否同 chunk 的 thinking_delta (网关双发)
+            break;
+          }
+          case "thinking_start": {
+            if (held != null) flushHeld(ev.partial);
+            thinkingBlock = (ev.partial as any).content?.[ev.contentIndex] ?? thinkingBlock;
+            ensureThinkingFirst(ev.partial);
+            sanitizePartial(ev.partial);
+            const gi = indexOfBlock(ev.partial, thinkingBlock);
+            out.push(gi !== -1 && gi !== ev.contentIndex ? { ...ev, contentIndex: gi } : ev);
+            break;
+          }
+          case "thinking_delta": {
+            if (held != null) {
+              if (isDuplicateOfThinking(held, ev.delta)) {
+                held = null; // content 字段里的思考副本, 吞掉
+              } else {
+                flushHeld(ev.partial);
+              }
             }
+            ensureThinkingFirst(ev.partial);
+            sanitizePartial(ev.partial);
+            const gi = indexOfBlock(ev.partial, thinkingBlock);
+            out.push(thinkingBlock && gi !== -1 && gi !== ev.contentIndex ? { ...ev, contentIndex: gi } : ev);
+            break;
           }
-          sanitizePartial(ev.partial);
-          out.push(ev);
-          continue;
+          case "thinking_end": {
+            if (held != null) flushHeld(ev.partial);
+            sanitizePartial(ev.partial);
+            const gi = indexOfBlock(ev.partial, thinkingBlock);
+            out.push(thinkingBlock && gi !== -1 && gi !== ev.contentIndex ? { ...ev, contentIndex: gi } : ev);
+            break;
+          }
+          case "text_end": {
+            if (held != null) flushHeld(ev.partial);
+            const s = textBlock ? stateFor(textBlock) : null;
+            if (s) s.clean = stripThinkingTags(s.raw, true); // final: 不再扣留疑似半标签
+            ensureThinkingFirst(ev.partial);
+            sanitizePartial(ev.partial);
+            if (textStartSent) {
+              const ti = indexOfBlock(ev.partial, textBlock);
+              out.push({ ...ev, content: s?.clean ?? "", contentIndex: ti !== -1 ? ti : ev.contentIndex });
+            }
+            // textStartSent=false: 正文全是思考副本, 从未展示过 text block → 丢弃 text_end
+            break;
+          }
+          case "done":
+          case "error": {
+            const msg = (ev as any).message ?? (ev as any).error;
+            if (held != null) flushHeld(msg);
+            ensureThinkingFirst(msg);
+            sanitizePartial(msg);
+            // 从未展示过的空 text block 从最终消息移除, 避免留下空段落
+            if (!textStartSent && textBlock && msg) {
+              const content = (msg as any).content;
+              const ti = Array.isArray(content) ? content.indexOf(textBlock) : -1;
+              const s = texts.get(textBlock);
+              if (ti !== -1 && (s?.clean ?? "") === "") content.splice(ti, 1);
+            }
+            out.push(ev);
+            break;
+          }
+          default: {
+            if (held != null) flushHeld((ev as any).partial);
+            sanitizePartial((ev as any).partial);
+            out.push(ev);
+          }
         }
-        if (held) {
-          const f = flushHeld((ev as any).partial);
-          if (f) out.push(f);
-        }
-        if (ev.type === "text_end") {
-          const s = stateFor(ev.contentIndex);
-          s.clean = stripThinkingTags(s.raw, true); // final: 不再扣留疑似半标签
-          sanitizePartial(ev.partial);
-          out.push({ ...ev, content: s.clean });
-          continue;
-        }
-        if (ev.type === "done" || ev.type === "error") {
-          sanitizePartial((ev as any).message ?? (ev as any).error);
-          out.push(ev);
-          continue;
-        }
-        sanitizePartial((ev as any).partial);
-        out.push(ev);
       }
     } catch (e) {
       out.push({
