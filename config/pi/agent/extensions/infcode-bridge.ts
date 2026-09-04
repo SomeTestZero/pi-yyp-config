@@ -1,42 +1,95 @@
 /**
- * InfCode Bridge for pi — v4
+ * InfCode Bridge for pi — v5
  * 目标: 让 pi 使用 InfCode(VSCode插件) 的企业模型与额度。
  *
- * v4 变更: 流式输出探测 (诊断 thinking 泄漏/重复), 每版本自动跑一次
- * v3 变更: 内置按网关元数据校准的参数表; 转储 /models 完整元数据
+ * v5 变更 (修复回答格式问题):
+ *  1) 网关会把 reasoning_content 同时复制进 content (带 <thinking> 标签), pi 内置
+ *     openai-completions 解析器两个字段都收 → 正文泄漏 <thinking> 文本且内容重复。
+ *     现用自定义 ProviderStreams 包装内置实现, 在事件流层面:
+ *       - 吞掉与 thinking delta 重复的 text delta (按 chunk 判重)
+ *       - 从正文剥离 <thinking>…</thinking> 区段 (含跨 delta 的不完整标签)
+ *  2) 按网关真实行为修正模型元数据: deepseek 系实为推理模型 (默认思考, 无 effort 档),
+ *     用 thinkingFormat:"deepseek" 使 pi 能下发 thinking enabled/disabled;
+ *     glm-5.2 用 "zai" 格式, kimi-k3 用 openai 默认格式, 均声明 supportsReasoningEffort。
+ *  3) 按 pi 文档改为 async 工厂内完成发现与注册 (pi 会等待工厂, 模型立即可用),
+ *     不再写 models.json (文档: models.json 覆盖优先级高于原生注册, 会盖住新 compat),
+ *     启动时自动清除 v4 写入的旧 models.json infcode 节。
+ *  4) 重型诊断 (CLI 扫描/进程扫描/日志挖掘) 不再每次启动跑, 仅 /infcode-status 按需运行。
  */
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createProvider, openAICompletionsApi } from "@earendil-works/pi-ai";
+import {
+  createProvider,
+  openAICompletionsApi,
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type AssistantMessageEventStream,
+  type Context,
+  type Model,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+  type StreamOptions,
+} from "@earendil-works/pi-ai";
 import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 
-const BRIDGE_VERSION = "4.0";
+const BRIDGE_VERSION = "5.0";
+const PROVIDER_ID = "infcode";
 const HOME = os.homedir();
 const REPORT = path.join(HOME, ".infcode", "pi-report.txt");
 const AUTH = path.join(HOME, ".infcode", "auth.json");
+const CACHE = path.join(HOME, ".infcode", "pi-models-cache.json");
 const MODELS_JSON = path.join(HOME, ".pi", "agent", "models.json");
 const GATEWAY_BASE = "https://www.tokensinfinity.com/acode/v1";
 
-// 网关元数据校准的参数 (网关 /models 无元数据时使用)
-// 网关声明: context_length 1M; reasoning_efforts 仅 glm-5.2/kimi-k3 支持 (minimal~xhigh)
-const MODEL_DEFAULTS: Record<string, any> = {
-  GL56: { contextWindow: 1000000, maxTokens: 128000, reasoning: false, input: ["text", "image"] },
-  "deepseek-v4-pro": { contextWindow: 1000000, maxTokens: 384000, reasoning: false },
-  "deepseek-v4-flash": { contextWindow: 1000000, maxTokens: 384000, reasoning: false },
-  "glm-5.2": {
+type ModelCompat = NonNullable<Model<"openai-completions">["compat"]>;
+type ModelOverrides = {
+  reasoning: boolean;
+  input?: ("text" | "image")[];
+  contextWindow?: number;
+  maxTokens?: number;
+  thinkingLevelMap?: Model<"openai-completions">["thinkingLevelMap"];
+  compat?: ModelCompat;
+};
+
+// 网关元数据校准的参数表 (网关 /models 无对应元数据时兜底)
+// 注意: deepseek 系虽然 /models 未声明 reasoning_efforts, 但流里实测默认推 reasoning_content
+const MODEL_DEFAULTS: Record<string, ModelOverrides> = {
+  GL56: {
+    reasoning: false,
+    input: ["text", "image"],
     contextWindow: 1000000,
     maxTokens: 128000,
+  },
+  "deepseek-v4-pro": {
     reasoning: true,
+    contextWindow: 1000000,
+    maxTokens: 384000,
+    compat: { thinkingFormat: "deepseek", supportsReasoningEffort: false },
+  },
+  "deepseek-v4-flash": {
+    reasoning: true,
+    contextWindow: 1000000,
+    maxTokens: 384000,
+    compat: { thinkingFormat: "deepseek", supportsReasoningEffort: false },
+  },
+  "glm-5.2": {
+    reasoning: true,
+    contextWindow: 1000000,
+    maxTokens: 128000,
     thinkingLevelMap: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null },
+    compat: { thinkingFormat: "zai", supportsReasoningEffort: true },
   },
   "kimi-k3": {
-    contextWindow: 1000000,
-    maxTokens: 1000000,
     reasoning: true,
     input: ["text", "image"],
+    contextWindow: 1000000,
+    maxTokens: 1000000,
     thinkingLevelMap: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null },
+    compat: { supportsReasoningEffort: true },
   },
 };
 
@@ -45,6 +98,7 @@ async function log(s: unknown) {
   const line = typeof s === "string" ? s : JSON.stringify(s, null, 2);
   section += line + "\n";
   try {
+    await fsp.mkdir(path.dirname(REPORT), { recursive: true });
     await fsp.appendFile(REPORT, line + "\n", "utf8");
   } catch {}
 }
@@ -56,7 +110,376 @@ function readJson(p: string): Promise<any> {
   return fsp.readFile(p, "utf8").then((t) => JSON.parse(t));
 }
 
-// ---------------- 目录遍历 ----------------
+// =============================================================================
+// 事件流净化器: 修复网关把思考内容复制进 content 造成的泄漏/重复
+// =============================================================================
+
+const OPEN_TAG = "<thinking>";
+const CLOSE_TAG = "</thinking>";
+
+/**
+ * 从 content 文本中剥离 <thinking>…</thinking> 区段。
+ * 网关已经把思考内容经 reasoning_content 单独下发, content 里这份是副本。
+ * final=false 时, 末尾疑似不完整开标签 ("<thi"…) 的部分先扣住, 等后续 delta 再判定。
+ */
+function stripThinkingTags(raw: string, final = false): string {
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    const open = raw.indexOf(OPEN_TAG, i);
+    if (open === -1) {
+      out += raw.slice(i);
+      i = raw.length;
+      break;
+    }
+    out += raw.slice(i, open);
+    const close = raw.indexOf(CLOSE_TAG, open + OPEN_TAG.length);
+    if (close === -1) {
+      // 开标签未闭合: 思考仍在流式输出, 抑制到目前末尾
+      i = raw.length;
+      break;
+    }
+    i = close + CLOSE_TAG.length;
+    while (i < raw.length && /\s/.test(raw[i])) i++; // 闭合标签后的空白不留给正文
+  }
+  if (!final && out.length > 0) {
+    let hold = 0;
+    const maxHold = Math.min(OPEN_TAG.length - 1, out.length);
+    for (let k = 1; k <= maxHold; k++) {
+      if (out.endsWith(OPEN_TAG.slice(0, k))) hold = k;
+    }
+    if (hold > 0) out = out.slice(0, -hold);
+  }
+  return out;
+}
+
+/** 判断某个 text delta 是否是紧随其后的 thinking delta 的重复 (同一 SSE chunk 的双发) */
+function isDuplicateOfThinking(textDelta: string, thinkingDelta: string): boolean {
+  if (textDelta === thinkingDelta) return true;
+  return textDelta.replace(/^<thinking>\s*/, "") === thinkingDelta;
+}
+
+function emptyUsage() {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+/**
+ * 包装内置 openai-completions 事件流:
+ *  - text_delta 先押后一拍, 若与同一 chunk 的 thinking delta 重复则吞掉;
+ *  - 每个 text block 维护 raw(原始拼接)→clean(剥离 <thinking> 区段), 只转发 clean 的增量;
+ *  - 所有携带 partial 的事件在转发前就地净化其中的 text block (TUI 直接渲染 partial);
+ *  - thinking / toolcall / usage / done / error 事件原样透传。
+ */
+function sanitizeEventStream(inner: AssistantMessageEventStream, model: Model<any>): AssistantMessageEventStream {
+  const out = createAssistantMessageEventStream();
+  (async () => {
+    const texts = new Map<number, { raw: string; clean: string }>();
+    let held: { index: number; delta: string } | null = null;
+
+    const stateFor = (i: number) => {
+      let s = texts.get(i);
+      if (!s) {
+        s = { raw: "", clean: "" };
+        texts.set(i, s);
+      }
+      return s;
+    };
+
+    const sanitizePartial = (msg: AssistantMessage | undefined) => {
+      const content = (msg as any)?.content;
+      if (!Array.isArray(content)) return;
+      for (let i = 0; i < content.length; i++) {
+        const b = content[i];
+        if (b && b.type === "text" && typeof b.text === "string") {
+          const s = texts.get(i);
+          b.text = s ? s.clean : stripThinkingTags(b.text, true);
+        }
+      }
+    };
+
+    // 把押后的 text_delta 结算掉; 返回需要补发的 text_delta (无增量则 null)
+    const flushHeld = (partial: AssistantMessage): AssistantMessageEvent | null => {
+      if (!held) return null;
+      const s = stateFor(held.index);
+      s.raw += held.delta;
+      const next = stripThinkingTags(s.raw);
+      const growth = next.startsWith(s.clean) ? next.slice(s.clean.length) : "";
+      s.clean = next;
+      const index = held.index;
+      held = null;
+      sanitizePartial(partial); // 先净化再发, 避免 TUI 瞬间渲染到原始污染文本
+      if (growth.length === 0) return null;
+      return { type: "text_delta", contentIndex: index, delta: growth, partial };
+    };
+
+    try {
+      for await (const ev of inner) {
+        if (ev.type === "text_delta") {
+          // 先押后: 等看下一个事件是不是同一 chunk 的 thinking_delta (网关双发)
+          if (held) {
+            const f = flushHeld(ev.partial);
+            if (f) out.push(f);
+          }
+          held = { index: ev.contentIndex, delta: ev.delta };
+          continue;
+        }
+        if (ev.type === "thinking_delta") {
+          if (held) {
+            if (!isDuplicateOfThinking(held.delta, ev.delta)) {
+              const f = flushHeld(ev.partial);
+              if (f) out.push(f);
+            } else {
+              held = null; // content 字段里的思考副本, 吞掉
+            }
+          }
+          sanitizePartial(ev.partial);
+          out.push(ev);
+          continue;
+        }
+        if (held) {
+          const f = flushHeld((ev as any).partial);
+          if (f) out.push(f);
+        }
+        if (ev.type === "text_end") {
+          const s = stateFor(ev.contentIndex);
+          s.clean = stripThinkingTags(s.raw, true); // final: 不再扣留疑似半标签
+          sanitizePartial(ev.partial);
+          out.push({ ...ev, content: s.clean });
+          continue;
+        }
+        if (ev.type === "done" || ev.type === "error") {
+          sanitizePartial((ev as any).message ?? (ev as any).error);
+          out.push(ev);
+          continue;
+        }
+        sanitizePartial((ev as any).partial);
+        out.push(ev);
+      }
+    } catch (e) {
+      out.push({
+        type: "error",
+        reason: "error",
+        error: {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: emptyUsage(),
+          stopReason: "error",
+          errorMessage: e instanceof Error ? e.message : String(e),
+          timestamp: Date.now(),
+        } as AssistantMessage,
+      });
+    } finally {
+      out.end();
+    }
+  })();
+  return out;
+}
+
+/** 用净化器包装内置 openai-completions 的 ProviderStreams */
+function makeSanitizedStreams(): ProviderStreams {
+  const base = openAICompletionsApi() as ProviderStreams;
+  const wrapped: ProviderStreams = {
+    stream: (model: Model<any>, context: Context, options?: StreamOptions) =>
+      sanitizeEventStream(base.stream(model, context, options), model),
+    streamSimple: (model: Model<any>, context: Context, options?: SimpleStreamOptions) =>
+      sanitizeEventStream(base.streamSimple(model, context, options), model),
+  };
+  if (base.fetchDeferred) wrapped.fetchDeferred = base.fetchDeferred.bind(base);
+  if (base.cancelDeferred) wrapped.cancelDeferred = base.cancelDeferred.bind(base);
+  return wrapped;
+}
+
+// =============================================================================
+// 模型目录构建
+// =============================================================================
+
+function num(v: any): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+function buildModelEntry(id: string, baseUrl: string, meta?: any): Model<"openai-completions"> {
+  const d = MODEL_DEFAULTS[id];
+  const m = meta ?? {};
+  const contextWindow =
+    num(m.context_window) ?? num(m.contextWindow) ?? num(m.context_length) ?? num(m.max_input_tokens) ?? d?.contextWindow ?? 1000000;
+  const maxTokens =
+    num(m.max_output_tokens) ?? num(m.max_completion_tokens) ?? num(m.maxOutputTokens) ?? num(m.maxTokens) ?? num(m.output_tokens_limit) ?? d?.maxTokens ?? 128000;
+  // 网关元数据: 声明了 reasoning_efforts 的模型支持思考强度
+  const efforts: string[] = Array.isArray(m.reasoning_efforts) ? m.reasoning_efforts : [];
+  const reasoning = d?.reasoning ?? efforts.length > 0;
+  let thinkingLevelMap = d?.thinkingLevelMap;
+  if (!thinkingLevelMap && efforts.length > 0) {
+    thinkingLevelMap = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null };
+    for (const e of efforts) (thinkingLevelMap as any)[e] = e;
+  }
+  const features: string[] = Array.isArray(m.features) ? m.features : [];
+  const input: ("text" | "image")[] =
+    features.includes("vision") || (d?.input ?? ["text"]).includes("image") ? ["text", "image"] : ["text"];
+  return {
+    id,
+    name: `InfCode ${id}`,
+    api: "openai-completions",
+    provider: PROVIDER_ID,
+    baseUrl,
+    reasoning,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    compat: {
+      supportsDeveloperRole: false, // 用 system 而不是 developer 角色
+      maxTokensField: "max_tokens", // 网关是 Azure 风格, 用 max_tokens
+      ...d?.compat,
+    },
+  };
+}
+
+// =============================================================================
+// 发现: auth.json + 网关 /models (+ 本地缓存兜底)
+// =============================================================================
+
+async function readAuth(): Promise<{ accessToken: string; refreshToken?: string; baseUrl?: string } | null> {
+  try {
+    const a = await readJson(AUTH);
+    if (a?.accessToken) return a;
+  } catch {}
+  return null;
+}
+
+async function fetchModelsFromGateway(
+  baseUrl: string,
+  token: string
+): Promise<{ baseUrl: string; models: Array<{ id: string; meta?: any }> } | null> {
+  const bases: string[] = [];
+  const authBase = baseUrl.replace(/\/+$/, "");
+  bases.push(/\/v1$/.test(authBase) ? authBase : authBase + "/acode/v1");
+  if (!bases.includes(GATEWAY_BASE)) bases.push(GATEWAY_BASE);
+  for (const base of [...new Set(bases)]) {
+    try {
+      const r = await fetch(base + "/models", {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      await log(`probe GET ${base}/models -> HTTP ${r.status}`);
+      if (!r.ok) continue;
+      const j: any = await r.json();
+      const data: any[] = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      const models = data
+        .filter((m: any) => typeof m?.id === "string" && m.id.length > 0)
+        .map((m: any) => ({ id: m.id as string, meta: m }));
+      if (models.length > 0) return { baseUrl: base, models };
+    } catch (e) {
+      await log(`probe GET ${base}/models -> ERR ${(e as Error).message}`);
+    }
+  }
+  return null;
+}
+
+async function readModelsCache(): Promise<{ baseUrl: string; models: Array<{ id: string; meta?: any }> } | null> {
+  try {
+    const j = await readJson(CACHE);
+    if (typeof j?.baseUrl === "string" && Array.isArray(j?.models) && j.models.length > 0) return j;
+  } catch {}
+  return null;
+}
+
+async function writeModelsCache(found: { baseUrl: string; models: Array<{ id: string; meta?: any }> }) {
+  try {
+    await fsp.mkdir(path.dirname(CACHE), { recursive: true });
+    await fsp.writeFile(CACHE, JSON.stringify({ ...found, at: new Date().toISOString() }, null, 2), "utf8");
+  } catch {}
+}
+
+/** v4 曾把模型写进 models.json; 文档明确 models.json 覆盖优先级高于扩展注册, 旧配置会盖住新 compat, 启动时清除。
+ *  返回 true 表示删掉了旧节 (当前进程可能已加载过旧配置, 需要提示用户再 /reload 一次) */
+async function removeStaleModelsJson(): Promise<boolean> {
+  try {
+    const j = await readJson(MODELS_JSON);
+    if (j && typeof j === "object" && j.providers && j.providers[PROVIDER_ID]) {
+      delete j.providers[PROVIDER_ID];
+      await fsp.writeFile(MODELS_JSON, JSON.stringify(j, null, 2), "utf8");
+      await log("已从 models.json 移除旧版写入的 infcode 配置 (改为扩展内原生注册)");
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+let staleConfigRemoved = false;
+
+async function registerInfcodeProvider(pi: ExtensionAPI): Promise<{ ok: boolean; modelCount: number; baseUrl?: string }> {
+  if (await removeStaleModelsJson()) staleConfigRemoved = true;
+  // 防御: 清除可能存在的旧同名注册 (v4 时代/models.json 覆盖), 保证走净化后的流
+  try {
+    pi.unregisterProvider(PROVIDER_ID);
+  } catch {}
+  const auth = await readAuth();
+  if (!auth) {
+    await log("!! 未找到 ~/.infcode/auth.json — 请先在 VSCode InfCode 插件登录");
+    return { ok: false, modelCount: 0 };
+  }
+
+  // 1) 实时探测网关; 2) 失败用本地缓存; 3) 再失败用内置参数表
+  let found = await fetchModelsFromGateway(auth.baseUrl ?? GATEWAY_BASE, auth.accessToken);
+  if (found) {
+    await writeModelsCache(found);
+  } else {
+    const cached = await readModelsCache();
+    if (cached) {
+      found = cached;
+      await log("网关探测失败, 使用缓存的模型目录: " + cached.baseUrl);
+    } else {
+      found = {
+        baseUrl: GATEWAY_BASE,
+        models: Object.keys(MODEL_DEFAULTS).map((id) => ({ id })),
+      };
+      await log("网关探测失败且无缓存, 使用内置模型表: " + Object.keys(MODEL_DEFAULTS).join(", "));
+    }
+  }
+
+  const models = found.models.map(({ id, meta }) => buildModelEntry(id, found!.baseUrl, meta));
+
+  pi.registerProvider(
+    createProvider({
+      id: PROVIDER_ID,
+      name: "InfCode (词元无限)",
+      baseUrl: found.baseUrl,
+      auth: {
+        apiKey: {
+          name: "InfCode 登录态 (auth.json)",
+          async login() {
+            throw new Error("请先在 VSCode InfCode 插件中登录, 然后 /reload");
+          },
+          async resolve(_opts: any) {
+            const a = await readAuth();
+            if (!a?.accessToken) return undefined;
+            return { auth: { apiKey: a.accessToken }, source: "stored API key" } as any;
+          },
+        },
+      },
+      models,
+      api: makeSanitizedStreams(),
+    })
+  );
+  await log(`已注册 provider "${PROVIDER_ID}": ${models.length} 个模型 @ ${found.baseUrl}`);
+  return { ok: true, modelCount: models.length, baseUrl: found.baseUrl };
+}
+
+// =============================================================================
+// 按需诊断 (仅 /infcode-status 与 /infcode-stream-test 使用)
+// =============================================================================
+
 async function walkFiles(dir: string, depth: number, onFile: (p: string) => void | Promise<void>) {
   if (depth > 6) return;
   let entries: import("node:fs").Dirent[];
@@ -76,7 +499,6 @@ async function walkFiles(dir: string, depth: number, onFile: (p: string) => void
   }
 }
 
-// ---------------- 找 CLI 二进制 ----------------
 async function findCliCandidates(): Promise<string[]> {
   const exts = path.join(HOME, ".vscode", "extensions");
   const roots: string[] = [];
@@ -99,15 +521,11 @@ async function findCliCandidates(): Promise<string[]> {
 
 function runCli(exe: string, args: string[], timeoutMs = 25000): Promise<{ out: string; err: string }> {
   return new Promise((resolve) => {
-    execFile(
-      exe,
-      args,
-      { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
-      (err, stdout, stderr) =>
-        resolve({
-          out: String(stdout ?? ""),
-          err: String(stderr ?? "") + (err ? ` [exit:${(err as any)?.code}]` : ""),
-        })
+    execFile(exe, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) =>
+      resolve({
+        out: String(stdout ?? ""),
+        err: String(stderr ?? "") + (err ? ` [exit:${(err as any)?.code}]` : ""),
+      })
     );
   });
 }
@@ -127,7 +545,6 @@ async function findRealCli(): Promise<{ exe: string; help: string } | null> {
   return null;
 }
 
-// ---------------- 运行中进程 ----------------
 function queryProcesses(): Promise<string> {
   return new Promise((resolve) => {
     const cmd = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*infcode*' -or $_.CommandLine -like '*opencode*' -or $_.CommandLine -like '*tokfinity*' } | Select-Object ProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress`;
@@ -140,7 +557,6 @@ function queryProcesses(): Promise<string> {
   });
 }
 
-// ---------------- 扫日志挖 URL ----------------
 async function scanLogsForUrls(): Promise<string[]> {
   const logsDir = path.join(HOME, ".infcode", "logs");
   const urls = new Set<string>();
@@ -158,73 +574,7 @@ async function scanLogsForUrls(): Promise<string[]> {
   return [...urls];
 }
 
-// ---------------- 探测网关模型 ----------------
-async function probeOne(url: string, token: string, headerStyle: "bearer" | "x-api-key") {
-  const headers =
-    headerStyle === "bearer"
-      ? { Authorization: `Bearer ${token}` }
-      : { "x-api-key": token, "Content-Type": "application/json" };
-  try {
-    const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-    await log(`probe GET ${url} [${headerStyle}] -> HTTP ${r.status}`);
-    if (!r.ok) return null;
-    const j: any = await r.json();
-    await log(`RAW /models response:\n${JSON.stringify(j).slice(0, 8000)}`);
-    const data: any[] = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
-    const models = data.map((m: any) => m?.id).filter((x: any) => typeof x === "string" && x.length > 0);
-    if (models.length > 0) return { endpoint: url, models, headerStyle, raw: data };
-    await log(`probe GET ${url} [${headerStyle}] -> 200 但无模型列表: ${JSON.stringify(j).slice(0, 300)}`);
-  } catch (e) {
-    await log(`probe GET ${url} [${headerStyle}] -> ERR ${(e as Error).message}`);
-  }
-  return null;
-}
-
-async function probeModels(base: string, token: string) {
-  const paths = ["/models", "/v1/models", "/model/list", "/list"];
-  for (const p of paths) {
-    const u = base.replace(/\/+$/, "") + p;
-    const r1 = await probeOne(u, token, "bearer");
-    if (r1) return r1;
-    const r2 = await probeOne(u, token, "x-api-key");
-    if (r2) return r2;
-  }
-  return null;
-}
-
-async function cliListModels(exe: string): Promise<string[]> {
-  const ids = new Set<string>();
-  for (const args of [["models"], ["models", "acode"], ["models", "--json"], ["models", "acode", "--json"]]) {
-    const { out, err } = await runCli(exe, args);
-    const text = out + "\n" + err;
-    await log(`run: infcode.exe ${args.join(" ")} ->\n${text.slice(0, 1500)}`);
-    try {
-      const j = JSON.parse(out);
-      const pick = (o: any): void => {
-        if (!o) return;
-        if (typeof o === "string") return ids.add(o);
-        if (Array.isArray(o)) return o.forEach(pick);
-        if (typeof o === "object") {
-          for (const k of ["id", "model", "modelID", "modelId", "name"])
-            if (typeof o[k] === "string" && o[k]) ids.add(o[k]);
-          Object.values(o).forEach(pick);
-        }
-      };
-      pick(j);
-      if (ids.size) break;
-    } catch {}
-    for (const line of text.split(/\r?\n/)) {
-      for (const m of line.matchAll(/[a-zA-Z0-9][a-zA-Z0-9._-]{2,60}(?:\/[a-zA-Z0-9._-]{1,60})?/g)) {
-        const t = m[0];
-        if (/claude|gpt|deepseek|kimi|qwen|glm|gemini|llama|codestral|mistral|mini|doubao|sonnet|opus|haiku/i.test(t)) ids.add(t);
-      }
-    }
-    if (ids.size) break;
-  }
-  return [...ids].filter((x) => !/^(acode|kilo|infcode|usage|cost|token|provider|model)$/i.test(x));
-}
-
-// ---------------- 流式输出探测 (诊断 thinking 泄漏/重复) ----------------
+// 流式输出探测: 验证 content/reasoning_content 双发行为与 thinking 开关是否生效
 async function runStreamProbes(baseUrl: string, token: string, modelIds: string[]) {
   sectionLog("STREAM PROBES");
   const endpoint = baseUrl.replace(/\/+$/, "") + "/chat/completions";
@@ -233,13 +583,14 @@ async function runStreamProbes(baseUrl: string, token: string, modelIds: string[
     model,
     messages: [{ role: "user", content: "hi" }],
     stream: true,
-    max_tokens: 16,
+    max_tokens: 64,
     ...extra,
   });
   const variants: Array<[string, any]> = [
     ["plain", {}],
     ["reasoning_effort:high", { reasoning_effort: "high" }],
     ["thinking.enabled", { thinking: { type: "enabled" } }],
+    ["thinking.disabled", { thinking: { type: "disabled" } }],
   ];
   for (const id of modelIds) {
     for (const [label, extra] of variants) {
@@ -259,7 +610,23 @@ async function runStreamProbes(baseUrl: string, token: string, modelIds: string[
         const text = await r.text();
         const lines = text.split(/\r?\n/).filter((l) => l.startsWith("data:"));
         await log(`  SSE lines=${lines.length}`);
-        await log("  RAW(前3500字符):\n" + text.slice(0, 3500));
+        // 只保留 delta 摘要, 避免报告过大
+        for (const l of lines.slice(0, 40)) {
+          try {
+            const j = JSON.parse(l.slice(5).trim());
+            const d = j?.choices?.[0]?.delta;
+            const fr = j?.choices?.[0]?.finish_reason;
+            if (d || fr) {
+              const keys = Object.keys(d ?? {}).filter((k) => (d as any)[k] != null && (d as any)[k] !== "");
+              await log(
+                `  delta keys=[${keys.join(",")}]` +
+                  (d?.content ? ` content=${JSON.stringify(d.content).slice(0, 80)}` : "") +
+                  (d?.reasoning_content ? ` reasoning=${JSON.stringify(d.reasoning_content).slice(0, 80)}` : "") +
+                  (fr ? ` finish=${fr}` : "")
+              );
+            }
+          } catch {}
+        }
       } catch (e) {
         await log(`### ${id} [${label}] ERR ${(e as Error).message}`);
       }
@@ -268,210 +635,44 @@ async function runStreamProbes(baseUrl: string, token: string, modelIds: string[
   sectionLog("STREAM PROBES END");
 }
 
-// ---------------- 注册 provider / 写 models.json ----------------
-async function readAuth(): Promise<{ accessToken: string; refreshToken: string; baseUrl: string } | null> {
-  try {
-    const a = await readJson(AUTH);
-    if (a?.accessToken) return a;
-  } catch {}
-  return null;
-}
+// =============================================================================
+// 扩展入口 (async 工厂: pi 会等待其完成, 模型在启动时即可用)
+// =============================================================================
 
-function num(v: any): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
-}
-
-function buildModelEntry(id: string, meta?: any) {
-  const d = MODEL_DEFAULTS[id] ?? {};
-  const m = meta ?? {};
-  const contextWindow =
-    num(m.context_window) ?? num(m.contextWindow) ?? num(m.context_length) ?? num(m.max_input_tokens) ?? num(m.input_tokens_limit) ?? d.contextWindow ?? 1000000;
-  const maxTokens =
-    num(m.max_output_tokens) ?? num(m.max_completion_tokens) ?? num(m.maxOutputTokens) ?? num(m.maxTokens) ?? num(m.output_tokens_limit) ?? d.maxTokens ?? 128000;
-  // 网关元数据: 只有声明了 reasoning_efforts 的模型才支持思考强度参数
-  const efforts: string[] = Array.isArray(m.reasoning_efforts) ? m.reasoning_efforts : [];
-  const reasoning = efforts.length > 0 ? true : d.reasoning ?? false;
-  const levelMap: Record<string, string | null> = {};
-  for (const e of ["minimal", "low", "medium", "high", "xhigh"]) levelMap[e] = efforts.includes(e) ? e : null;
-  levelMap.max = null;
-  const features: string[] = Array.isArray(m.features) ? m.features : [];
-  const input: string[] = features.includes("vision") || (d.input ?? ["text"]).includes("image") ? ["text", "image"] : ["text"];
-  return {
-    id,
-    name: `InfCode ${id}`,
-    reasoning,
-    input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
-    compat: { supportsDeveloperRole: false },
-    ...(reasoning ? { thinkingLevelMap: levelMap } : {}),
-  };
-}
-
-async function writeModelsJson(baseUrl: string, api: string, models: Array<{ id: string; meta?: any }>) {
-  let existing: any = {};
-  try {
-    existing = await readJson(MODELS_JSON);
-  } catch {}
-  if (typeof existing !== "object" || existing === null || Array.isArray(existing)) existing = {};
-  const providers = existing.providers && typeof existing.providers === "object" ? existing.providers : {};
-  providers.infcode = {
-    baseUrl,
-    api,
-    compat: { supportsDeveloperRole: false, maxTokensField: "max_tokens" },
-    models: models.map(({ id, meta }) => buildModelEntry(id, meta)),
-  };
-  const out = { ...existing, providers };
-  await fsp.mkdir(path.dirname(MODELS_JSON), { recursive: true });
-  await fsp.writeFile(MODELS_JSON, JSON.stringify(out, null, 2), "utf8");
-}
-
-// ---------------- 主流程 ----------------
-export default function (pi: ExtensionAPI) {
-  let done = false;
-  let started = false;
-
-  async function runDiscovery(force = false) {
-    if (started && !force) return;
-    started = true;
-    section = `=== pi InfCode Bridge v${BRIDGE_VERSION} report @ ${new Date().toISOString()} ===`;
-    sectionLog("START");
-    try {
-      const auth = await readAuth();
-      if (!auth) {
-        await log("!! 未找到 ~/.infcode/auth.json — 请先在 VSCode InfCode 插件登录");
-        return;
-      }
-      await log("auth.json 存在 (token 不打印), baseUrl=" + auth.baseUrl);
-
-      const cli = await findRealCli();
-      if (cli) await log("CLI help:\n" + cli.help.slice(0, 2000));
-      else await log("!! 未在已知目录找到 InfCode CLI 二进制");
-
-      const procs = await queryProcesses();
-      if (procs.trim()) await log("运行中相关进程:\n" + procs.slice(0, 3000));
-      else await log("(未发现运行中的 infcode/opencode 进程)");
-
-      const urls = await scanLogsForUrls();
-      await log("日志中发现的 URL:\n" + (urls.slice(0, 60).join("\n") || "(无)"));
-
-      const candidates: string[] = [];
-      for (const u of urls) {
-        try {
-          const uu = new URL(u);
-          if (!/tokensinfinity|tokfinity|infcode/i.test(uu.host)) continue;
-          const p1 = uu.pathname;
-          const m = p1.match(/^(\/(?:[^/]+\/)*v1)\/chat\/completions/);
-          if (m) candidates.push(uu.origin + m[1]);
-          else if (/\/v1\//.test(p1)) candidates.push(uu.origin + p1.slice(0, p1.lastIndexOf("/")));
-          else candidates.push(uu.origin);
-        } catch {}
-      }
-      candidates.push(GATEWAY_BASE);
-      candidates.push("https://www.tokensinfinity.com");
-      if (auth.baseUrl) candidates.push(auth.baseUrl.replace(/\/+$/, ""));
-      await log("候选网关 base: " + [...new Set(candidates)].join(" | "));
-
-      let found: { endpoint: string; models: string[]; headerStyle?: string; raw?: any[] } | null = null;
-      for (const c of [...new Set(candidates)]) {
-        found = await probeModels(c, auth.accessToken);
-        if (found) break;
-      }
-
-      if (!found && cli) {
-        const ids = await cliListModels(cli.exe);
-        if (ids.length) {
-          found = { endpoint: GATEWAY_BASE + "/models", models: ids };
-          await log("!! 兜底成功: 用 CLI models 命令拿到 " + ids.length + " 个模型");
-        }
-      }
-
-      if (found && found.models.length > 0) {
-        const api = "openai-completions";
-        const baseUrl = found.endpoint.replace(/\/models\/?$/, "");
-        await log(`!! 成功: 网关=${baseUrl} 模型数=${found.models.length}`);
-        await log("模型: " + found.models.join(", "));
-
-        pi.registerProvider(
-          createProvider({
-            id: "infcode",
-            name: "InfCode (词元无限)",
-            baseUrl,
-            auth: {
-              apiKey: {
-                name: "InfCode 登录态 (auth.json)",
-                async login() {
-                  throw new Error("请先在 VSCode InfCode 插件中登录, 然后 /reload");
-                },
-                async resolve(_opts: any) {
-                  const a = await readAuth();
-                  if (!a?.accessToken) return undefined;
-                  return { auth: { apiKey: a.accessToken }, source: "stored API key" } as any;
-                },
-              },
-            },
-            models: [],
-            api: openAICompletionsApi(),
-          })
-        );
-
-        const metaMap = new Map((found.raw ?? []).map((m: any) => [m?.id, m]));
-        await writeModelsJson(
-          baseUrl,
-          api,
-          found.models.map((id) => ({ id, meta: metaMap.get(id) }))
-        );
-        await log("已写入 " + MODELS_JSON);
-        // 首次自动流式探测 (诊断 thinking 泄漏/重复; 每版本仅一次, 可用 /infcode-stream-test 重跑)
-        try {
-          const probedFlag = path.join(HOME, ".infcode", "pi-stream-probed.txt");
-          const flag = await fsp.readFile(probedFlag, "utf8").catch(() => "");
-          if (flag.trim() !== BRIDGE_VERSION) {
-            await fsp.writeFile(probedFlag, BRIDGE_VERSION, "utf8");
-            await runStreamProbes(baseUrl, auth.accessToken, found.models);
-          }
-        } catch {}
-        sectionLog("DONE");
-        done = true;
-      } else {
-        await log("!! 未能从网关拿到模型列表 (端点未知或协议非标准)");
-        sectionLog("PARTIAL");
-      }
-    } catch (e) {
-      await log("!! 异常: " + (e as Error).stack);
-    }
-  }
+export default async function (pi: ExtensionAPI) {
+  section = `=== pi InfCode Bridge v${BRIDGE_VERSION} @ ${new Date().toISOString()} ===`;
+  const reg = await registerInfcodeProvider(pi);
 
   pi.registerCommand("infcode-status", {
-    description: "InfCode Bridge: 重新探测并显示报告",
+    description: "InfCode Bridge: 重新探测并运行完整诊断",
     handler: async (_args, ctx) => {
-      await runDiscovery(true);
-      try {
-        const t = await fsp.readFile(REPORT, "utf8");
-        ctx.ui.notify(`InfCode Bridge 报告: ${REPORT}\n${t.slice(-800)}`, "info");
-      } catch {
-        ctx.ui.notify(`InfCode Bridge 报告: ${REPORT}`, "info");
-      }
+      const r = await registerInfcodeProvider(pi);
+      const cli = await findRealCli();
+      if (cli) await log("CLI help:\n" + cli.help.slice(0, 2000));
+      const procs = await queryProcesses();
+      if (procs.trim()) await log("运行中相关进程:\n" + procs.slice(0, 3000));
+      const urls = await scanLogsForUrls();
+      await log("日志中发现的 URL:\n" + (urls.slice(0, 60).join("\n") || "(无)"));
+      ctx.ui.notify(
+        r.ok
+          ? `InfCode Bridge v${BRIDGE_VERSION}: 已注册 ${r.modelCount} 个模型 @ ${r.baseUrl}\n报告: ${REPORT}`
+          : `InfCode Bridge: 注册失败, 见报告 ${REPORT}`,
+        r.ok ? "info" : "warn"
+      );
     },
   });
 
   pi.registerCommand("infcode-stream-test", {
-    description: "InfCode Bridge: 流式输出探测 (诊断思考内容泄漏)",
+    description: "InfCode Bridge: 流式输出探测 (诊断思考内容泄漏/开关)",
     handler: async (_args, ctx) => {
-      await runDiscovery(true);
       try {
         const auth = await readAuth();
-        if (!auth) throw new Error("无 auth.json");
-        await runStreamProbes(GATEWAY_BASE, auth.accessToken, [
-          "GL56",
-          "deepseek-v4-flash",
-          "deepseek-v4-pro",
-          "glm-5.2",
-          "kimi-k3",
-        ]);
-        const t = await fsp.readFile(REPORT, "utf8");
-        ctx.ui.notify(`流式探测完成: ${REPORT}\n${t.slice(-1200)}`, "info");
+        if (!auth) throw new Error("无 auth.json, 请先在 VSCode InfCode 插件登录");
+        const cached = await readModelsCache();
+        const baseUrl = cached?.baseUrl ?? GATEWAY_BASE;
+        const ids = cached?.models?.map((m) => m.id) ?? Object.keys(MODEL_DEFAULTS);
+        await runStreamProbes(baseUrl, auth.accessToken, ids);
+        ctx.ui.notify(`流式探测完成, 报告: ${REPORT}`, "info");
       } catch (e) {
         ctx.ui.notify("流式探测失败: " + (e as Error).message, "error");
       }
@@ -479,9 +680,17 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    void runDiscovery().then(() => {
-      if (done) ctx.ui.notify(`InfCode Bridge v${BRIDGE_VERSION}: 已接入, /model 选择 infcode 模型`, "info");
-      else ctx.ui.notify(`InfCode Bridge v${BRIDGE_VERSION}: 探测未完成, 见 ${REPORT}`, "warn");
-    });
+    if (!reg.ok) {
+      ctx.ui.notify(`InfCode Bridge v${BRIDGE_VERSION}: 未找到登录态, 请先在 VSCode InfCode 插件登录后 /reload`, "warn");
+      return;
+    }
+    if (staleConfigRemoved) {
+      ctx.ui.notify(
+        `InfCode Bridge v${BRIDGE_VERSION}: 已清除 v4 写入 models.json 的旧配置, 请再执行一次 /reload 使新格式修复完全生效`,
+        "warn"
+      );
+      return;
+    }
+    ctx.ui.notify(`InfCode Bridge v${BRIDGE_VERSION}: 已接入 ${reg.modelCount} 个模型, /model 选择 infcode`, "info");
   });
 }

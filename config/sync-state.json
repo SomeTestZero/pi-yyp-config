@@ -5,7 +5,7 @@
       "lastSeen": "2026-09-04T01:40:35.663Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-09-04T03:29:57.889Z"
+      "lastSeen": "2026-09-04T04:10:36.340Z"
     }
   },
   "settings": {},
@@ -21,7 +21,7 @@
       "machine": "NEU-20230908KJS"
     },
     "config/pi/agent/extensions/infcode-bridge.ts": {
-      "ts": 1788492446626,
+      "ts": 1788495036331,
       "machine": "NEU-20230908KJS"
     }
   },
