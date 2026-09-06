@@ -2,13 +2,22 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-06T00:47:37.452Z"
+      "lastSeen": "2026-09-06T01:07:38.838Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-04T07:00:53.950Z"
     }
   },
-  "settings": {},
+  "settings": {
+    "defaultProvider": {
+      "ts": 1788655745115,
+      "machine": "yyp-home-pc"
+    },
+    "defaultModel": {
+      "ts": 1788655745115,
+      "machine": "yyp-home-pc"
+    }
+  },
   "packages": {
     "git:github.com/sometestzero/pi-token-speed": {
       "ts": 1788433644050,
