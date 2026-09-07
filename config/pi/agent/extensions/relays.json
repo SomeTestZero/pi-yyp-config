@@ -1,0 +1,64 @@
+{
+  // relay-autosync.ts 的站点配置。每个站点一段，支持 // 注释。
+  // 新增中转站：复制一段，改 id / baseUrl / apiKey 即可，模型清单会自动同步。
+  "providers": [
+    {
+      // Token 秘密花园：https://token.mmh1.top （文档见飞书《Token 秘密花园》）
+      "id": "token-garden",
+      "name": "Token 秘密花园",
+      "baseUrl": "https://token.mmh1.top/v1",
+      "apiKey": "$TOKEN_GARDEN_API_KEY",
+
+      // 平台文档的 SDK 示例统一带这个 UA，照做以兼容其风控
+      "headers": { "User-Agent": "curl/8.0" },
+
+      // 平台规定 claude 系列只能走 /v1/messages（Anthropic 协议）
+      "anthropicMessages": ["^claude-"],
+
+      // 生图模型走专用域名，避免 524 超时
+      "baseUrlRules": { "^gpt-image": "https://api.mmh1.top/v1" },
+
+      // 已知模型的精调参数（云端同步后仍生效，按 id 匹配）
+      "models": {
+        "gpt-5.5":        { "name": "GPT-5.5",          "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.4":        { "name": "GPT-5.4",          "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.6-sol":    { "name": "GPT-5.6 Sol",      "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.6-terra":  { "name": "GPT-5.6 Terra",    "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.6-luna":   { "name": "GPT-5.6 Luna",     "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "claude-opus-4-7":  { "name": "Claude Opus 4.7",  "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "claude-opus-4-8":  { "name": "Claude Opus 4.8",  "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "claude-sonnet-5":  { "name": "Claude Sonnet 5",  "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 64000 },
+        "gemini-3.5-flash": { "name": "Gemini 3.5 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 64000 },
+        "gpt-image-2":    { "name": "GPT-Image-2 (生图)",  "reasoning": false, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 },
+        "gpt-image-2-c":  { "name": "GPT-Image-2-c (生图)", "reasoning": false, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 }
+      },
+
+      // 断网/未登录时的兜底清单（带 * 的是按定价表推测的 id，以云端同步结果为准）
+      "fallbackModels": [
+        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-5.5", "gpt-5.4",
+        "gemini-3.5-flash",
+        "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5",
+        "gpt-image-2", "gpt-image-2-c"
+      ]
+    }
+
+    // 示例：内网 LLM 网关（http://10.105.1.5:4001/v1）
+    // 注意：现有 llm-gateway.ts 已注册同 id provider。若要迁移到本插件，
+    // 请先删除 llm-gateway.ts、把下面这段取消注释并改 "enabled": true。
+    // 迁移后模型清单随网关自动更新，无需再手改 llm-gateway.ts 的 MODELS 数组。
+    // 该网关对部分模型的 thinking 参数有特殊要求（见 llm-gateway.ts 顶部注释），
+    // 迁移前请确认其 /v1/models 可用、且相关模型的 thinking 配置已写入 "models"。
+    // {
+    //   "id": "neu-llm-gateway",
+    //   "name": "NEU LLM Gateway",
+    //   "enabled": false,
+    //   "baseUrl": "http://10.105.1.5:4001/v1",
+    //   "apiKey": "$LLM_GATEWAY_API_KEY",
+    //   "defaults": { "contextWindow": 131072, "maxTokens": 16384 },
+    //   "models": {
+    //     "qwen3.6-27b": { "name": "Qwen3.6 27B", "reasoning": true }
+    //   }
+    // }
+  ]
+}
