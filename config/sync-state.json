@@ -2,13 +2,22 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-04T01:40:35.663Z"
+      "lastSeen": "2026-09-08T02:55:20.897Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-08T07:50:39.218Z"
     }
   },
-  "settings": {},
+  "settings": {
+    "defaultProvider": {
+      "ts": 1788655745115,
+      "machine": "yyp-home-pc"
+    },
+    "defaultModel": {
+      "ts": 1788655745115,
+      "machine": "yyp-home-pc"
+    }
+  },
   "packages": {
     "git:github.com/sometestzero/pi-token-speed": {
       "ts": 1788433644050,
@@ -17,12 +26,24 @@
     "git:github.com/sometestzero/pi-infcode-bridge": {
       "ts": 1788504678499,
       "machine": "NEU-20230908KJS"
+    },
+    "git:github.com/sometestzero/pi-comm-relay": {
+      "ts": 1788758972820,
+      "machine": "yyp-home-pc"
     }
   },
   "files": {
-    "config/pi/agent/extensions/llm-gateway.ts": {
-      "ts": 1788486686457,
-      "machine": "NEU-20230908KJS"
+    "config/pi/agent/extensions/neu-llm-gateway.ts": {
+      "ts": 1788758972820,
+      "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/extensions/relays.auto.json": {
+      "ts": 1788758972820,
+      "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/extensions/relays.json": {
+      "ts": 1788758972820,
+      "machine": "yyp-home-pc"
     }
   },
   "tombstones": [
@@ -31,6 +52,12 @@
       "id": "config/pi/agent/extensions/infcode-bridge.ts",
       "ts": 1788504678499,
       "machine": "NEU-20230908KJS"
+    },
+    {
+      "type": "file",
+      "id": "config/pi/agent/extensions/llm-gateway.ts",
+      "ts": 1788758972820,
+      "machine": "yyp-home-pc"
     }
   ]
 }

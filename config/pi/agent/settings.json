@@ -3,6 +3,7 @@
   "hideThinkingBlock": false,
   "packages": [
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
+    "git:git@github.com:SomeTestZero/pi-comm-relay.git",
     "git:git@github.com:SomeTestZero/pi-infcode-bridge",
     "git:git@github.com:SomeTestZero/pi-token-speed",
     "git:github.com/SomeTestZero/pi-volcengine-plans",
@@ -11,6 +12,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "volcengine-plan",
-  "defaultModel": "glm-5.3-flash"
+  "defaultProvider": "kimi-coding",
+  "defaultModel": "k3"
 }
