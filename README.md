@@ -33,6 +33,27 @@ pi          # 启动后执行：
 | `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
 | `/sync push` / `/sync pull` | 单向操作 |
 | `/sync on` / `/sync off` | 开关本机的自动同步 |
+| `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后退出 pi 自动转发 |
+| `/sync lan off` | 清空内网镜像主机，关闭退出自动转发 |
+
+## 内网机器（无外网）
+
+`/sync lan v2x`（`v2x` 为 `~/.ssh/config` 中的 Host 别名）把**配置同步仓库 + 所有已安装 git 插件仓库**推送到该主机的本地 git 镜像，自动完成：
+
+- 目标机建 `~/pi-mirror/<name>.git` 裸仓库 + 无 `.git` 后缀软链（兼容两种 URL 写法）
+- 目标机配 `url."$HOME/pi-mirror/".insteadOf`，把 `https://github.com/<org>/`、`git@github.com:<org>/` 透明重写到本地镜像 → 目标机 `pi install` / `pi update --extensions` 全程离线
+
+内网机一次性准备：
+
+```bash
+pi install git:git@github.com:SomeTestZero/pi-yyp-config   # 会被 insteadOf 重写到镜像
+# settings.json 设（sync 键本机有效，不参与同步）：
+#   "sync": { "repo": "/home/<用户>/pi-mirror/pi-yyp-config.git",
+#             "excludeKeys": ["defaultProvider","defaultModel"] }
+pi                        # 启动即自动拉取合并，补齐全部插件/配置
+```
+
+注意：`npm:` 来源的包无法离线安装，把主力机 `~/.pi/agent/npm/` 整目录拷到内网机同路径即可；`auth.json` 按设计永不同步，内网机用 `/infcode-connect` 共享主力机登录态。主力机不在内网时退出转发自动静默跳过。
 
 ## 同步范围
 
@@ -60,7 +81,8 @@ pi          # 启动后执行：
     "enabled": true,     // 总开关
     "autoSync": true,    // 启动拉取 + 退出推送
     "excludeKeys": [],   // 额外排除的 settings 键
-    "includeFiles": []   // 额外纳入的文件，如 ["web-search.json"]
+    "includeFiles": [],  // 额外纳入的文件，如 ["web-search.json"]
+    "lanHosts": []       // 内网镜像主机（ssh 别名），退出 pi 时自动转发
   }
 }
 ```
