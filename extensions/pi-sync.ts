@@ -11,13 +11,17 @@
  *   /sync                 一键同步：拉取 → 合并 → 推送（交互解决冲突）
  *   /sync init [repo] [--mode=remote|local]   初始化（新机器接入）
  *   /sync push | pull | status | on | off
+ *   /sync lan <ssh-host>  内网同步：配置仓库 + 所有 git 插件仓库推送到该主机
+ *                         的 ~/pi-mirror 镜像（自动建仓/配 insteadOf），并记住
+ *                         该主机，之后退出 pi 自动转发；/sync lan off 关闭
  *
  * 自动同步（sync.autoSync，默认开）：session_start 后后台拉取合并；退出时若有本地改动则推送。
  *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
  *               "enabled": true, "autoSync": true,
- *               "excludeKeys": [], "includeFiles": [] } }
+ *               "excludeKeys": [], "includeFiles": [],
+ *               "lanHosts": ["v2x"] } }   // 内网镜像主机（ssh config 别名），退出时自动转发
  *
  * 测试钩子：PI_SYNC_HOME 覆盖 ~/.pi，PI_SYNC_WORK 覆盖同步克隆目录。
  */
@@ -121,6 +125,7 @@ export interface SyncConfig {
   machineId: string;
   excludeKeys: string[];
   includeFiles: string[];
+  lanHosts: string[];
   branch?: string;
 }
 
@@ -411,6 +416,9 @@ export function loadConfig(): SyncConfig {
     machineId: typeof s?.machineId === "string" && s.machineId ? s.machineId : os.hostname(),
     excludeKeys: Array.isArray(s?.excludeKeys) ? (s!.excludeKeys as string[]) : [],
     includeFiles: Array.isArray(s?.includeFiles) ? (s!.includeFiles as string[]) : [],
+    lanHosts: Array.isArray(s?.lanHosts)
+      ? (s!.lanHosts as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [],
     branch: typeof s?.branch === "string" ? s.branch : undefined,
   };
 }
@@ -1554,6 +1562,228 @@ export async function performInit(
 }
 
 // ---------------------------------------------------------------------------
+// 内网镜像（lan push）：把配置/插件仓库从本机转发到内网机的本地 git 镜像
+//
+// 目标机约定（ensureLanMirror 自动建立，幂等）：
+//   ~/pi-mirror/<name>.git        裸仓库（<name> 为仓库名，不含 .git）
+//   ~/pi-mirror/<name> → .git     软链，兼容 URL 带不带 .git 后缀两种写法
+//   git config url."$HOME/pi-mirror/".insteadOf = https://<host>/<org>/ 等
+// 目标机 pi 的 sync.repo 指向 $HOME/pi-mirror/<sync仓库名>.git 即可全程离线同步。
+// ---------------------------------------------------------------------------
+
+const LAN_MIRROR_DIR = "pi-mirror"; // 目标机 $HOME 下的镜像目录
+const LAN_PROBE_TIMEOUT_MS = 8_000;
+const LAN_ENSURE_TIMEOUT_MS = 45_000;
+const LAN_FETCH_TIMEOUT_MS = 25_000;
+
+interface LanRepo {
+  /** 镜像仓库名（不含 .git） */
+  name: string;
+  /** 本地克隆目录 */
+  dir: string;
+  /** 推送源 ref；空串表示运行时探测（origin/HEAD → origin/main → HEAD） */
+  src: string;
+}
+
+export interface LanHostResult {
+  host: string;
+  skipped?: string;
+  pushed: string[];
+  failed: string[];
+}
+
+/** sh 单引号转义 */
+function shq(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** 通过 ssh 在目标机执行 sh 脚本（stdin 传入，非交互） */
+function runSsh(
+  host: string,
+  script: string,
+  timeout = LAN_ENSURE_TIMEOUT_MS,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const p = spawn("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "sh", "-s"], { env: process.env });
+    let stdout = "";
+    let stderr = "";
+    const t = setTimeout(() => {
+      try {
+        p.kill();
+      } catch {}
+      resolve({ code: 1, stdout, stderr: stderr || "ssh 超时" });
+    }, timeout);
+    p.stdout?.on("data", (d) => (stdout += d));
+    p.stderr?.on("data", (d) => (stderr += d));
+    p.on("error", (e) => {
+      clearTimeout(t);
+      resolve({ code: 1, stdout, stderr: e.message });
+    });
+    p.on("close", (c) => {
+      clearTimeout(t);
+      resolve({ code: c ?? 1, stdout, stderr });
+    });
+    p.stdin?.write(script);
+    p.stdin?.end();
+  });
+}
+
+/** 解析 git 包源 → { host, user, project }；npm:/本地路径/无法识别返回 null */
+export function parseGitPkg(src0: string): { host: string; user: string; project: string } | null {
+  let u = (src0 ?? "").trim();
+  if (!u || u.startsWith("npm:")) return null;
+  if (/^\.{0,2}[\\/]/.test(u) || /^[a-zA-Z]:[\\/]/.test(u)) return null; // 本地路径
+  if (u.startsWith("git:")) u = u.slice(4).trim();
+  // 去掉末尾 @ref（仅当 @ 出现在最后一个 / 之后，避免误伤 git@host 写法）
+  const at = u.lastIndexOf("@");
+  if (at > u.lastIndexOf("/")) u = u.slice(0, at);
+  u = u.replace(/\.git$/, "");
+  let m = u.match(/^git@([^:/]+):([^/]+)\/([^/]+)$/); // git@host:user/repo
+  if (!m) m = u.match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/([^/]+)\/([^/]+)$/i); // proto://[user@]host[:port]/user/repo
+  if (!m) m = u.match(/^([^/:@\s]+\.[^/:@\s]+)\/([^/]+)\/([^/]+)$/); // host/user/repo 裸形式
+  if (!m) return null;
+  return { host: m[1], user: m[2], project: m[3] };
+}
+
+/** 收集需要镜像的仓库：配置同步仓库（含 config/ 快照）+ 所有 git 包的本地克隆 */
+export function lanRepos(cfg: SyncConfig): LanRepo[] {
+  const out: LanRepo[] = [];
+  const seen = new Set<string>();
+  const selfName = cfg.repo ? parseGitPkg(cfg.repo)?.project : undefined;
+  if (selfName && /^[\w][\w.-]*$/.test(selfName) && fs.existsSync(path.join(workDir(), ".git"))) {
+    out.push({ name: selfName, dir: workDir(), src: "HEAD" });
+    seen.add(selfName);
+  }
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const pkgs = Array.isArray(live.packages) ? (live.packages as unknown[]) : [];
+  for (const e of pkgs) {
+    const info = parseGitPkg(entrySource(e));
+    if (!info || seen.has(info.project) || !/^[\w][\w.-]*$/.test(info.project)) continue;
+    const dir = path.join(agentDir(), "git", info.host, info.user, info.project);
+    if (!fs.existsSync(path.join(dir, ".git"))) continue; // 未安装的包跳过
+    seen.add(info.project);
+    out.push({ name: info.project, dir, src: "" });
+  }
+  return out;
+}
+
+/** 目标机 insteadOf 前缀：每个 (host,user) 覆盖 https 与 git@ 两种写法 */
+function lanPrefixes(cfg: SyncConfig): string[] {
+  const pairs = new Map<string, { host: string; user: string }>();
+  const add = (src: string) => {
+    const i = parseGitPkg(src);
+    if (i) pairs.set(`${i.host}/${i.user}`, i);
+  };
+  if (cfg.repo) add(cfg.repo);
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  for (const e of Array.isArray(live.packages) ? (live.packages as unknown[]) : []) add(entrySource(e));
+  const out: string[] = [];
+  for (const { host, user } of pairs.values()) out.push(`https://${host}/${user}/`, `git@${host}:${user}/`);
+  return out;
+}
+
+/** 在目标机建立镜像目录与 URL 重写（幂等）；返回错误信息或 null */
+async function ensureLanMirror(host: string, repos: LanRepo[], cfg: SyncConfig): Promise<string | null> {
+  const prefixes = lanPrefixes(cfg);
+  const lines = [
+    "set -e",
+    `mkdir -p "$HOME/${LAN_MIRROR_DIR}"`,
+    `cd "$HOME/${LAN_MIRROR_DIR}"`,
+    `for r in ${repos.map((r) => shq(r.name)).join(" ")}; do`,
+    `  if [ ! -d "$r.git" ]; then git init --bare -q "$r.git"; git -C "$r.git" symbolic-ref HEAD refs/heads/main; fi`,
+    `  ln -sfn "$r.git" "$r"`,
+    "done",
+  ];
+  if (prefixes.length) {
+    lines.push(
+      `base="$HOME/${LAN_MIRROR_DIR}/"`,
+      `for p in ${prefixes.map(shq).join(" ")}; do`,
+      `  git config --global --get-all "url.$base.insteadOf" 2>/dev/null | grep -qxF "$p" || git config --global --add "url.$base.insteadOf" "$p"`,
+      "done",
+    );
+  }
+  lines.push("echo LAN_MIRROR_READY");
+  const r = await runSsh(host, lines.join("\n"));
+  if (r.code !== 0 || !r.stdout.includes("LAN_MIRROR_READY")) {
+    return (r.stderr || r.stdout).trim().slice(0, 160) || "远端镜像初始化失败";
+  }
+  return null;
+}
+
+async function detectSrcRef(dir: string): Promise<string> {
+  for (const ref of ["origin/HEAD", "origin/main", "HEAD"]) {
+    const r = await run("git", ["rev-parse", "--verify", ref], { cwd: dir, timeout: 8_000, env: GIT_ENV() });
+    if (r.code === 0) return ref;
+  }
+  return "";
+}
+
+async function lanPushHost(cfg: SyncConfig, host: string): Promise<LanHostResult> {
+  const res: LanHostResult = { host, pushed: [], failed: [] };
+  const probe = await run("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "true"], {
+    timeout: LAN_PROBE_TIMEOUT_MS + 4_000,
+  });
+  if (probe.code !== 0) {
+    res.skipped = "主机不可达";
+    return res;
+  }
+  const repos = lanRepos(cfg);
+  if (!repos.length) {
+    res.skipped = "本机没有可镜像的 git 包";
+    return res;
+  }
+  const ensureErr = await ensureLanMirror(host, repos, cfg);
+  if (ensureErr) {
+    res.skipped = `镜像初始化失败: ${ensureErr}`;
+    return res;
+  }
+  for (const r of repos) {
+    let src = r.src;
+    if (!src) {
+      // 尽力刷新 GitHub 最新状态；不可达则用本地缓存（离线场景正常）
+      await run("git", ["fetch", "origin", "-q"], { cwd: r.dir, timeout: LAN_FETCH_TIMEOUT_MS, env: GIT_ENV() });
+      src = await detectSrcRef(r.dir);
+    }
+    if (!src) {
+      res.failed.push(`${r.name}(无可用分支)`);
+      continue;
+    }
+    const pr = await run("git", ["push", "--force", `${host}:${LAN_MIRROR_DIR}/${r.name}.git`, `${src}:refs/heads/main`], {
+      cwd: r.dir,
+      timeout: PUSH_TIMEOUT_MS,
+      env: GIT_ENV(),
+    });
+    if (pr.code === 0) res.pushed.push(r.name);
+    else res.failed.push(`${r.name}(${(pr.stderr || "push 失败").trim().slice(0, 60)})`);
+  }
+  return res;
+}
+
+/** 内网同步入口：把配置仓库与全部 git 插件仓库推送到各内网主机镜像 */
+export async function lanPush(
+  ui: UiLike | null,
+  hosts: string[],
+  opts: { quiet?: boolean } = {},
+): Promise<LanHostResult[]> {
+  const cfg = loadConfig();
+  const results: LanHostResult[] = [];
+  for (const host of hosts) {
+    const r = await lanPushHost(cfg, host);
+    results.push(r);
+    if (r.skipped) {
+      if (!opts.quiet) ui?.notify(`pi-sync lan → ${host}：已跳过（${r.skipped}）`, "warning");
+      continue;
+    }
+    if (r.failed.length) {
+      ui?.notify(`pi-sync lan → ${host}：推送 ${r.pushed.length} 个；失败 ${r.failed.length}：${r.failed.join("，")}`, "warning");
+    } else if (!opts.quiet) {
+      ui?.notify(`pi-sync lan → ${host}：${r.pushed.length} 个仓库已推送到内网镜像`, "info");
+    }
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
 
@@ -1645,7 +1875,7 @@ async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promis
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("sync", {
     description:
-      "多机配置同步：/sync [push|pull|status|on|off] 或 /sync init [repo] [--mode=remote|local]",
+      "多机配置同步：/sync [push|pull|status|on|off]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
     handler: async (args, ctx) => {
       const ui: UiLike = ctx.ui;
       const [sub, ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
@@ -1714,6 +1944,46 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (sub === "lan" || sub === "mirror") {
+        const target = rest.find((a) => !a.startsWith("--"));
+        if (target === "off") {
+          const liveP = liveSettingsPath();
+          const live = (readJson(liveP) ?? {}) as Side;
+          const sync = ((live.sync as Side | undefined) ?? {}) as Side;
+          sync.lanHosts = [];
+          live.sync = sync;
+          writeJson(liveP, live);
+          ui.notify("pi-sync：已清空内网镜像主机，退出自动转发已关闭", "info");
+          return;
+        }
+        if (!cfg.repo) {
+          ui.notify("pi-sync 未初始化，运行 /sync init", "warning");
+          return;
+        }
+        let hosts = cfg.lanHosts;
+        if (target) {
+          hosts = [target];
+          if (!cfg.lanHosts.includes(target)) {
+            const liveP = liveSettingsPath();
+            const live = (readJson(liveP) ?? {}) as Side;
+            const sync = ((live.sync as Side | undefined) ?? {}) as Side;
+            sync.lanHosts = [...cfg.lanHosts, target];
+            live.sync = sync;
+            writeJson(liveP, live);
+            ui.notify(`pi-sync：已记住内网主机 ${target}，以后退出 pi 会自动转发内网镜像`, "info");
+          }
+        }
+        if (!hosts.length) {
+          ui.notify("用法: /sync lan <ssh主机>（~/.ssh/config 里的 Host 别名，如 v2x）；/sync lan off 关闭自动转发", "warning");
+          return;
+        }
+        ui.notify(`pi-sync：同步中，完成后转发内网镜像（${hosts.join(", ")}）…`, "info");
+        const r0 = await runSync(ui, { push: true, interactive: ctx.hasUI, materialize: true });
+        if (r0.errors.length) ui.notify(`pi-sync 同步阶段警告：${r0.errors.join("；")}`, "warning");
+        await lanPush(ui, hosts);
+        return;
+      }
+
       if (sub === "push" || sub === "pull" || sub === "" || sub === undefined) {
         if (!cfg.repo) {
           ui.notify("pi-sync 未初始化，运行 /sync init", "warning");
@@ -1735,7 +2005,10 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      ui.notify("用法: /sync [push|pull|status|on|off] 或 /sync init [repo] [--mode=remote|local]", "warning");
+      ui.notify(
+        "用法: /sync [push|pull|status|on|off]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
+        "warning",
+      );
     },
   });
 
@@ -1755,5 +2028,9 @@ export default function (pi: ExtensionAPI) {
     if (!fs.existsSync(path.join(workDir(), ".git"))) return;
     const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
     await Promise.race([autoRun(ui, "退出同步", true), new Promise((r) => setTimeout(r, 20_000))]);
+    // 内网镜像：退出时顺手把最新状态转发到各内网机（不可达则静默跳过）
+    if (cfg.lanHosts.length) {
+      await Promise.race([lanPush(null, cfg.lanHosts, { quiet: true }), new Promise((r) => setTimeout(r, 90_000))]);
+    }
   });
 }
