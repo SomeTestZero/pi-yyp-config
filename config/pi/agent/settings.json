@@ -8,6 +8,9 @@
     "git:git@github.com:SomeTestZero/pi-token-speed",
     "git:github.com/SomeTestZero/pi-volcengine-plans",
     "git:git@github.com:SomeTestZero/pi-yyp-config",
+    "npm:pi-background-tasks",
+    "npm:pi-goal-x",
+    "npm:pi-subagents",
     "npm:pi-web-access"
   ],
   "theme": "dark",

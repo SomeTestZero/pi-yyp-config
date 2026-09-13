@@ -8,7 +8,7 @@
       "lastSeen": "2026-09-09T06:05:59.588Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-09-13T12:25:51.865Z"
+      "lastSeen": "2026-09-13T12:58:33.072Z"
     }
   },
   "settings": {
@@ -33,6 +33,18 @@
     "git:github.com/sometestzero/pi-comm-relay": {
       "ts": 1788758972820,
       "machine": "yyp-home-pc"
+    },
+    "npm:pi-background-tasks": {
+      "ts": 1789304313065,
+      "machine": "VM-0-13-ubuntu"
+    },
+    "npm:pi-subagents": {
+      "ts": 1789304313065,
+      "machine": "VM-0-13-ubuntu"
+    },
+    "npm:pi-goal-x": {
+      "ts": 1789304313065,
+      "machine": "VM-0-13-ubuntu"
     }
   },
   "files": {
