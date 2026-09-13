@@ -8,7 +8,7 @@
       "lastSeen": "2026-09-09T06:05:59.588Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-09-13T15:16:45.884Z"
+      "lastSeen": "2026-09-13T15:18:50.320Z"
     }
   },
   "settings": {
@@ -69,8 +69,8 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/extensions/relays.json": {
-      "ts": 1788758972820,
-      "machine": "yyp-home-pc"
+      "ts": 1789312730319,
+      "machine": "VM-0-13-ubuntu"
     }
   },
   "tombstones": [

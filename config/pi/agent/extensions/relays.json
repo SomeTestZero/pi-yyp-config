@@ -6,7 +6,11 @@
       // Token 秘密花园：https://token.mmh1.top （文档见飞书《Token 秘密花园》）
       "id": "token-garden",
       "name": "Token 秘密花园",
-      "baseUrl": "https://token.mmh1.top/v1",
+      // 统一走 API 域名：控制台域名 token.mmh1.top 在境内 DNS 被污染（解析到
+      // Twitter/Meta 的 IP），拿它当 baseUrl 时 GET /models 必然超时，模型清单
+      // 只能退回手写的 fallbackModels（← gpt-6-astra 缺失的真正原因）。
+      // api.mmh1.top 实测 OpenAI / Anthropic 两种协议都通，模型清单也全。
+      "baseUrl": "https://api.mmh1.top/v1",
       "apiKey": "$TOKEN_GARDEN_API_KEY",
 
       // 平台文档的 SDK 示例统一带这个 UA，照做以兼容其风控
@@ -15,31 +19,37 @@
       // 平台规定 claude 系列只能走 /v1/messages（Anthropic 协议）
       "anthropicMessages": ["^claude-"],
 
-      // 生图模型走专用域名，避免 524 超时
-      "baseUrlRules": { "^gpt-image": "https://api.mmh1.top/v1" },
+      // 生图模型（gpt-image-*）不是对话模型，排除出 /model 列表
+      "exclude": ["^gpt-image"],
 
       // 已知模型的精调参数（云端同步后仍生效，按 id 匹配）
       "models": {
-        "gpt-5.5":        { "name": "GPT-5.5",          "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.4":        { "name": "GPT-5.4",          "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.6-sol":    { "name": "GPT-5.6 Sol",      "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.6-terra":  { "name": "GPT-5.6 Terra",    "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.6-luna":   { "name": "GPT-5.6 Luna",     "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "claude-opus-4-7":  { "name": "Claude Opus 4.7",  "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "claude-opus-4-8":  { "name": "Claude Opus 4.8",  "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "claude-sonnet-5":  { "name": "Claude Sonnet 5",  "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 64000 },
-        "gemini-3.5-flash": { "name": "Gemini 3.5 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 64000 },
-        "gpt-image-2":    { "name": "GPT-Image-2 (生图)",  "reasoning": false, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 },
-        "gpt-image-2-c":  { "name": "GPT-Image-2-c (生图)", "reasoning": false, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 16384 }
+        "gpt-6-astra":     { "name": "GPT-6 Astra",     "reasoning": true, "contextWindow": 1000000, "maxTokens": 128000 },
+        "gpt-5.5":         { "name": "GPT-5.5",         "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.6-sol":     { "name": "GPT-5.6 Sol",     "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.6-terra":   { "name": "GPT-5.6 Terra",   "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "gpt-5.6-luna":    { "name": "GPT-5.6 Luna",    "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
+        "grok-4.6":        { "name": "Grok 4.6",        "reasoning": true, "input": ["text", "image"], "contextWindow": 256000, "maxTokens": 32768 },
+        "claude-opus-5":   { "name": "Claude Opus 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "claude-opus-4-7": { "name": "Claude Opus 4.7", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "claude-opus-4-8": { "name": "Claude Opus 4.8", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "claude-sonnet-5": { "name": "Claude Sonnet 5", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 64000 },
+        "claude-fable-5":   { "name": "Claude Fable 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "claude-fable-5-1": { "name": "Claude Fable 5.1", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
+        "gemini-3.6-flash": { "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 64000 },
+        "gemini-3.7-flash": { "name": "Gemini 3.7 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 64000 }
       },
 
-      // 断网/未登录时的兜底清单（带 * 的是按定价表推测的 id，以云端同步结果为准）
+      // 断网/未登录时的兜底清单（与云端 /v1/models 的对话模型保持一致，生图已排除）。
+      // 云端同步成功时会用上游结果覆盖；这里只保证「拉不到时也是对的」。
       "fallbackModels": [
+        "gpt-6-astra",
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-        "gpt-5.5", "gpt-5.4",
-        "gemini-3.5-flash",
-        "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5",
-        "gpt-image-2", "gpt-image-2-c"
+        "gpt-5.5",
+        "grok-4.6",
+        "gemini-3.7-flash", "gemini-3.6-flash",
+        "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5",
+        "claude-fable-5-1", "claude-fable-5"
       ]
     }
 
