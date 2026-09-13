@@ -8,7 +8,7 @@
       "lastSeen": "2026-09-09T06:05:59.588Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-09-13T13:15:36.089Z"
+      "lastSeen": "2026-09-13T13:21:53.387Z"
     }
   },
   "settings": {
@@ -44,6 +44,14 @@
     },
     "npm:pi-goal-x": {
       "ts": 1789304313065,
+      "machine": "VM-0-13-ubuntu"
+    },
+    "npm:@narumitw/pi-btw": {
+      "ts": 1789305713365,
+      "machine": "VM-0-13-ubuntu"
+    },
+    "npm:@narumitw/pi-plan-mode": {
+      "ts": 1789305713365,
       "machine": "VM-0-13-ubuntu"
     }
   },
