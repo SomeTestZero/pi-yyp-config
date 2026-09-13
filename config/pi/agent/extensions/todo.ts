@@ -8,7 +8,7 @@
  * - promptGuidelines 限定：仅复杂多步任务使用，简单任务不建 todo
  *
  * 状态存储在 tool result details 里（会话条目），分支/回溯时自动正确。
- * /todos 命令查看当前清单。
+ * /todos 命令查看清单；编辑器下方常驻 widget 实时跟随更新（仅 TUI）。
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -119,10 +119,42 @@ class TodoListComponent {
 	}
 }
 
+const WIDGET_KEY = "todo-list";
+const WIDGET_MAX_ITEMS = 6;
+
 export default function (pi: ExtensionAPI) {
 	// In-memory state (reconstructed from session on load)
 	let todos: Todo[] = [];
 	let nextId = 1;
+
+	/** 常驻底部 widget：跟随 todos 实时刷新，空清单时隐藏 */
+	const refreshWidget = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		if (todos.length === 0) {
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+			return;
+		}
+		const th = ctx.ui.theme;
+		const done = todos.filter((t) => t.status === "done").length;
+		const lines: string[] = [
+			th.fg("borderMuted", "─ ") +
+				th.fg("accent", `Todos ${done}/${todos.length}`) +
+				" " +
+				th.fg("borderMuted", "─".repeat(40)),
+		];
+		const display = todos.slice(0, WIDGET_MAX_ITEMS);
+		for (const t of display) {
+			const check =
+				t.status === "done" ? th.fg("success", "✓") : t.status === "in_progress" ? th.fg("warning", "▶") : th.fg("dim", "○");
+			const id = th.fg("accent", `#${t.id}`);
+			const text = t.status === "done" ? th.fg("dim", t.text) : th.fg("text", t.text);
+			lines.push(`${check} ${id} ${text}`);
+		}
+		if (todos.length > WIDGET_MAX_ITEMS) {
+			lines.push(th.fg("dim", `… 还有 ${todos.length - WIDGET_MAX_ITEMS} 项 (/todos 查看全部)`));
+		}
+		ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
+	};
 
 	/**
 	 * Reconstruct state from session entries.
@@ -145,8 +177,14 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	pi.on("session_start", async (_event, ctx) => {
+		reconstructState(ctx);
+		refreshWidget(ctx);
+	});
+	pi.on("session_tree", async (_event, ctx) => {
+		reconstructState(ctx);
+		refreshWidget(ctx);
+	});
 
 	pi.registerTool({
 		name: "todo",
@@ -161,12 +199,16 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: TodoParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const snapshot = () => ({ todos: todos.map((t) => ({ ...t })), nextId });
+			const finish = (result: { content: { type: "text"; text: string }[]; details: TodoDetails }) => {
+				refreshWidget(ctx);
+				return result;
+			};
 
 			switch (params.action) {
 				case "list":
-					return {
+					return finish({
 						content: [
 							{
 								type: "text" as const,
@@ -176,61 +218,61 @@ export default function (pi: ExtensionAPI) {
 							},
 						],
 						details: { action: "list", ...snapshot() } as TodoDetails,
-					};
+					});
 
 				case "add": {
-					if (!params.text) return err({ action: "add", ...snapshot() }, "text required for add");
+					if (!params.text) return finish(err({ action: "add", ...snapshot() }, "text required for add"));
 					const todo: Todo = { id: nextId++, text: params.text, status: "pending" };
 					todos.push(todo);
-					return {
+					return finish({
 						content: [{ type: "text" as const, text: `Added todo #${todo.id}: ${todo.text}` }],
 						details: { action: "add", ...snapshot() } as TodoDetails,
-					};
+					});
 				}
 
 				case "update": {
-					if (params.id === undefined) return err({ action: "update", ...snapshot() }, "id required for update");
-					if (!params.text) return err({ action: "update", ...snapshot() }, "text required for update");
+					if (params.id === undefined) return finish(err({ action: "update", ...snapshot() }, "id required for update"));
+					if (!params.text) return finish(err({ action: "update", ...snapshot() }, "text required for update"));
 					const todo = todos.find((t) => t.id === params.id);
-					if (!todo) return err({ action: "update", ...snapshot() }, `#${params.id} not found`);
+					if (!todo) return finish(err({ action: "update", ...snapshot() }, `#${params.id} not found`));
 					todo.text = params.text;
-					return {
+					return finish({
 						content: [{ type: "text" as const, text: `Updated todo #${todo.id}: ${todo.text}` }],
 						details: { action: "update", ...snapshot() } as TodoDetails,
-					};
+					});
 				}
 
 				case "set": {
-					if (params.id === undefined) return err({ action: "set", ...snapshot() }, "id required for set");
-					if (!params.status) return err({ action: "set", ...snapshot() }, "status required for set");
+					if (params.id === undefined) return finish(err({ action: "set", ...snapshot() }, "id required for set"));
+					if (!params.status) return finish(err({ action: "set", ...snapshot() }, "status required for set"));
 					const todo = todos.find((t) => t.id === params.id);
-					if (!todo) return err({ action: "set", ...snapshot() }, `#${params.id} not found`);
+					if (!todo) return finish(err({ action: "set", ...snapshot() }, `#${params.id} not found`));
 					todo.status = params.status;
-					return {
+					return finish({
 						content: [{ type: "text" as const, text: `Todo #${todo.id} → ${todo.status}` }],
 						details: { action: "set", ...snapshot() } as TodoDetails,
-					};
+					});
 				}
 
 				case "remove": {
-					if (params.id === undefined) return err({ action: "remove", ...snapshot() }, "id required for remove");
+					if (params.id === undefined) return finish(err({ action: "remove", ...snapshot() }, "id required for remove"));
 					const idx = todos.findIndex((t) => t.id === params.id);
-					if (idx === -1) return err({ action: "remove", ...snapshot() }, `#${params.id} not found`);
+					if (idx === -1) return finish(err({ action: "remove", ...snapshot() }, `#${params.id} not found`));
 					todos.splice(idx, 1);
-					return {
+					return finish({
 						content: [{ type: "text" as const, text: `Removed todo #${params.id}` }],
 						details: { action: "remove", ...snapshot() } as TodoDetails,
-					};
+					});
 				}
 
 				case "clear": {
 					const count = todos.length;
 					todos = [];
 					nextId = 1;
-					return {
+					return finish({
 						content: [{ type: "text" as const, text: `Cleared ${count} todos` }],
 						details: { action: "clear", todos: [], nextId: 1 } as TodoDetails,
-					};
+					});
 				}
 			}
 		},
