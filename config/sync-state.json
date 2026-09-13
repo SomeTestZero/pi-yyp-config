@@ -8,17 +8,17 @@
       "lastSeen": "2026-09-09T06:05:59.588Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-09-13T13:32:09.563Z"
+      "lastSeen": "2026-09-13T13:52:46.899Z"
     }
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1788655745115,
-      "machine": "yyp-home-pc"
+      "ts": 1789307566868,
+      "machine": "VM-0-13-ubuntu"
     },
     "defaultModel": {
-      "ts": 1788655745115,
-      "machine": "yyp-home-pc"
+      "ts": 1789307566868,
+      "machine": "VM-0-13-ubuntu"
     }
   },
   "packages": {
@@ -52,10 +52,6 @@
     },
     "npm:@narumitw/pi-plan-mode": {
       "ts": 1789305713365,
-      "machine": "VM-0-13-ubuntu"
-    },
-    "npm:pi-markdown-preview": {
-      "ts": 1789305906091,
       "machine": "VM-0-13-ubuntu"
     },
     "git:github.com/sometestzero/pi-todo-list": {
@@ -94,6 +90,12 @@
       "type": "file",
       "id": "config/pi/agent/extensions/todo.ts",
       "ts": 1789306254858,
+      "machine": "VM-0-13-ubuntu"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-markdown-preview",
+      "ts": 1789307566868,
       "machine": "VM-0-13-ubuntu"
     }
   ]

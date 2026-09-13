@@ -13,12 +13,11 @@
     "npm:@narumitw/pi-plan-mode",
     "npm:pi-background-tasks",
     "npm:pi-goal-x",
-    "npm:pi-markdown-preview",
     "npm:pi-subagents",
     "npm:pi-web-access"
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "kimi-coding",
-  "defaultModel": "k3"
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-flash"
 }
