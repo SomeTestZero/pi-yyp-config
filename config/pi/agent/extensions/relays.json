@@ -22,22 +22,57 @@
       // 生图模型（gpt-image-*）不是对话模型，排除出 /model 列表
       "exclude": ["^gpt-image"],
 
-      // 已知模型的精调参数（云端同步后仍生效，按 id 匹配）
+      // 已知模型的精调参数（云端同步后仍生效，按 id 匹配）。
+      // 上下文/输出上限取自各家官方规格；思考档位按上游实测的合法枚举写死——
+      // 同一模型在不同站点能接受的档位不同（例：本站 gpt-5.5 不收 minimal/max）。
+      // thinkingLevelMap：字符串=映射后发给上游，null=该档上游不认（pi 里不显示）。
       "models": {
-        "gpt-6-astra":     { "name": "GPT-6 Astra",     "reasoning": true, "contextWindow": 1000000, "maxTokens": 128000 },
-        "gpt-5.5":         { "name": "GPT-5.5",         "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.6-sol":     { "name": "GPT-5.6 Sol",     "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.6-terra":   { "name": "GPT-5.6 Terra",   "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "gpt-5.6-luna":    { "name": "GPT-5.6 Luna",    "reasoning": true, "contextWindow": 400000, "maxTokens": 128000 },
-        "grok-4.6":        { "name": "Grok 4.6",        "reasoning": true, "input": ["text", "image"], "contextWindow": 256000, "maxTokens": 32768 },
-        "claude-opus-5":   { "name": "Claude Opus 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "claude-opus-4-7": { "name": "Claude Opus 4.7", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "claude-opus-4-8": { "name": "Claude Opus 4.8", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "claude-sonnet-5": { "name": "Claude Sonnet 5", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 64000 },
-        "claude-fable-5":   { "name": "Claude Fable 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "claude-fable-5-1": { "name": "Claude Fable 5.1", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768 },
-        "gemini-3.6-flash": { "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 64000 },
-        "gemini-3.7-flash": { "name": "Gemini 3.7 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 64000 }
+        // ── GPT-5.5 / 5.6 / 6 代：1.05M 上下文、128K 输出 ──
+        // 上游档位：none(关思考) / low / medium / high / xhigh / max；minimal 直接 400
+        "gpt-6-astra":   { "name": "GPT-6 Astra",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-5.6-sol":   { "name": "GPT-5.6 Sol",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-5.6-terra": { "name": "GPT-5.6 Terra", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-5.6-luna":  { "name": "GPT-5.6 Luna",  "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // gpt-5.5 是上一代：没有 max 档
+        "gpt-5.5":       { "name": "GPT-5.5",       "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": null } },
+
+        // ── Claude：1M 上下文、128K 输出、adaptive thinking（用 effort 控档）──
+        // 实测输出块带真实 signature，所以不需要 allowEmptySignature。
+        // off = 发 thinking:{type:"disabled"}（fable 系列是 adaptive always-on，关不掉，故 off:null）
+        "claude-opus-5":   { "name": "Claude Opus 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-opus-4-8": { "name": "Claude Opus 4.8", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-opus-4-7": { "name": "Claude Opus 4.7", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-sonnet-5": { "name": "Claude Sonnet 5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-fable-5":   { "name": "Claude Fable 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                              "compat": { "forceAdaptiveThinking": true },
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-fable-5-1": { "name": "Claude Fable 5.1", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                              "compat": { "forceAdaptiveThinking": true },
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+
+        // ── Gemini：1M / 64K。关不掉思考，只能选强度（3.7 不收 minimal）──
+        "gemini-3.7-flash": { "name": "Gemini 3.7 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high" } },
+        "gemini-3.6-flash": { "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
+                              "thinkingLevelMap": { "off": null, "minimal": "minimal", "low": "low", "medium": "medium", "high": "high" } },
+
+        // ── Grok：500K 上下文，官方不设输出上限（这里给 128K 作为默认截断）──
+        // 本站 OpenAI 路由会忽略 reasoning_effort（无报错），但保留官方档位映射，换站点也能用
+        "grok-4.6": { "name": "Grok 4.6", "reasoning": true, "input": ["text", "image"], "contextWindow": 500000, "maxTokens": 131072,
+                      "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh" } }
       },
 
       // 断网/未登录时的兜底清单（与云端 /v1/models 的对话模型保持一致，生图已排除）。

@@ -8,7 +8,7 @@
       "lastSeen": "2026-09-09T06:05:59.588Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-09-13T15:20:22.960Z"
+      "lastSeen": "2026-09-13T15:34:50.141Z"
     }
   },
   "settings": {
@@ -69,7 +69,7 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/extensions/relays.json": {
-      "ts": 1789312730319,
+      "ts": 1789313690140,
       "machine": "VM-0-13-ubuntu"
     }
   },
