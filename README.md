@@ -82,6 +82,8 @@ pi-web-access 的 `web_search` 默认工作流是 `summary-review`：它会在�
 
 改完 `/reload` 生效；该文件已由 pi-sync 默认同步，配置一次即全机同步。也可以随时用 `/curator off|auto-summary|on` 切换（它会写入同一个文件）。
 
+> 老机器接入：先在那些机器上跑一次 `pi update --extensions`（pi-sync 自身走 pi 包机制分发），下次启动自动同步就会把 `workflow` 落地到它们各自的生效路径。
+
 ## 安全须知
 
 - **仓库必须保持私有**。配置快照中虽不含 auth.json，但包含可执行的扩展代码——有仓库写权限等于能在所有机器上执行代码。
