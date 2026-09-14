@@ -5,6 +5,7 @@
  *   - settings.json（顶层键级三方合并，packages 并集，排除键不同步）
  *   - keybindings.json（整文件三方合并）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）
+ *   - web-search.json（pi-web-access 的实际生效路径，默认同步；含疑似密钥时本机自动跳过）
  * 删除通过墓碑（tombstone）传播；冲突在交互模式弹窗选择，自动模式跳过并挂起。
  *
  * 命令：
@@ -17,7 +18,7 @@
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
  *               "enabled": true, "autoSync": true,
- *               "excludeKeys": [], "includeFiles": [] } }
+ *               "excludeKeys": [], "includeFiles": [], "excludeFiles": [] } }
  *
  * 测试钩子：PI_SYNC_HOME 覆盖 ~/.pi，PI_SYNC_WORK 覆盖同步克隆目录。
  */
@@ -79,6 +80,70 @@ function liveExtDir(): string {
 function pendingPath(): string {
   return path.join(agentDir(), "pi-sync-pending.json");
 }
+
+/**
+ * pi-web-access 的配置目录解析（与其 getWebSearchConfigDir 保持一致）：
+ *   PI_CODING_AGENT_DIR 优先；设置了 XDG_CONFIG_HOME 时用 $XDG_CONFIG_HOME/pi
+ *   （为空则退回历史路径 ~/.pi），否则用 ~/.pi/agent。
+ */
+function webSearchConfigDir(): string {
+  const explicit = process.env.PI_CODING_AGENT_DIR;
+  if (explicit) return explicit;
+  const xdg = process.env.XDG_CONFIG_HOME;
+  if (xdg) {
+    const xdgDir = path.join(xdg, "pi");
+    if (fs.existsSync(path.join(xdgDir, "web-search.json"))) return xdgDir;
+    if (fs.existsSync(path.join(piHome(), "web-search.json"))) return piHome();
+    return xdgDir;
+  }
+  return agentDir();
+}
+
+/** 本机实际生效的 web-search.json（pi-web-access 真正读取的那一份） */
+export function liveWebSearchPath(): string {
+  return path.join(webSearchConfigDir(), "web-search.json");
+}
+
+/** 历史路径 ~/.pi/web-search.json */
+function legacyWebSearchPath(): string {
+  return path.join(piHome(), "web-search.json");
+}
+
+/** 疑似凭证的键名（出现即拒绝把该文件推入 git 历史） */
+const SECRET_KEY_PATTERN = /(api[_-]?key|token|secret|password|passwd|credential|cookie)/i;
+
+/** web-search.json 是否含疑似密钥 */
+export function webSearchHasSecrets(p = liveWebSearchPath()): boolean {
+  const raw = readJson(p);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  return Object.entries(raw as Record<string, unknown>).some(
+    ([k, v]) => typeof v === "string" && v.trim() !== "" && SECRET_KEY_PATTERN.test(k),
+  );
+}
+
+/** 本机不参与同步 web-search.json 的原因；null 表示正常同步 */
+function webSearchSkipReason(cfg: SyncConfig): string | null {
+  if (cfg.excludeFiles.includes("web-search.json")) return "excludeFiles 排除";
+  if (webSearchHasSecrets()) return "本机含疑似密钥";
+  return null;
+}
+
+/** web-search.json 默认纳入同步（settings.sync.excludeFiles / 疑似密钥时除外） */
+function tracksWebSearch(cfg: SyncConfig): boolean {
+  return webSearchSkipReason(cfg) === null;
+}
+
+/** 历史路径若存在，跟随生效路径保持一致，避免旧路径残留旧值 */
+function mirrorLegacyWebSearch(): void {
+  const live = liveWebSearchPath();
+  const legacy = legacyWebSearchPath();
+  if (path.resolve(live) === path.resolve(legacy)) return;
+  if (!fs.existsSync(live) || !fs.existsSync(legacy)) return;
+  if (webSearchHasSecrets(legacy)) return;
+  try {
+    if (!fs.readFileSync(legacy).equals(fs.readFileSync(live))) fs.copyFileSync(live, legacy);
+  } catch {}
+}
 function lockPath(): string {
   return path.join(agentDir(), "pi-sync.lock");
 }
@@ -121,6 +186,7 @@ export interface SyncConfig {
   machineId: string;
   excludeKeys: string[];
   includeFiles: string[];
+  excludeFiles: string[];
   branch?: string;
 }
 
@@ -411,6 +477,7 @@ export function loadConfig(): SyncConfig {
     machineId: typeof s?.machineId === "string" && s.machineId ? s.machineId : os.hostname(),
     excludeKeys: Array.isArray(s?.excludeKeys) ? (s!.excludeKeys as string[]) : [],
     includeFiles: Array.isArray(s?.includeFiles) ? (s!.includeFiles as string[]) : [],
+    excludeFiles: Array.isArray(s?.excludeFiles) ? (s!.excludeFiles as string[]) : [],
     branch: typeof s?.branch === "string" ? s.branch : undefined,
   };
 }
@@ -578,7 +645,7 @@ function isIgnoredExtRel(rel: string): boolean {
 function liveAbsForRepoRel(rel: string, cfg: SyncConfig): string | null {
   if (rel === REPO_KEYBINDINGS) return liveKeybindingsPath();
   if (rel === REPO_WEBSEARCH) {
-    return cfg.includeFiles.includes("web-search.json") ? path.join(piHome(), "web-search.json") : null;
+    return tracksWebSearch(cfg) ? liveWebSearchPath() : null;
   }
   if (rel.startsWith(REPO_EXT_DIR + "/")) {
     const sub = rel.slice(REPO_EXT_DIR.length + 1);
@@ -604,8 +671,8 @@ function walkFiles(dir: string, base = dir): string[] {
 function collectLiveFiles(cfg: SyncConfig): Map<string, string> {
   const m = new Map<string, string>();
   if (fs.existsSync(liveKeybindingsPath())) m.set(REPO_KEYBINDINGS, liveKeybindingsPath());
-  if (cfg.includeFiles.includes("web-search.json")) {
-    const ws = path.join(piHome(), "web-search.json");
+  if (tracksWebSearch(cfg)) {
+    const ws = liveWebSearchPath();
     if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
   }
   for (const rel of walkFiles(liveExtDir())) {
@@ -620,7 +687,7 @@ function collectTreeFiles(cfg: SyncConfig): Map<string, string> {
   const root = workDir();
   const kb = path.join(root, REPO_KEYBINDINGS);
   if (fs.existsSync(kb)) m.set(REPO_KEYBINDINGS, kb);
-  if (cfg.includeFiles.includes("web-search.json")) {
+  if (tracksWebSearch(cfg)) {
     const ws = path.join(root, REPO_WEBSEARCH);
     if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
   }
@@ -926,16 +993,12 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   // 文件（keybindings / web-search / extensions）
   const liveFiles = collectLiveFiles(cfg);
   const treeFiles = collectTreeFiles(cfg);
-  // web-search.json 未显式启用时停止跟踪（脚本时代遗留，可能含 API key）
-  if (!cfg.includeFiles.includes("web-search.json") && treeFiles.has(REPO_WEBSEARCH)) {
-    fs.unlinkSync(treeFiles.get(REPO_WEBSEARCH)!);
-    treeFiles.delete(REPO_WEBSEARCH);
-    delete state.files[REPO_WEBSEARCH];
-    changed = true;
-    notes.push(`-文件 ${REPO_WEBSEARCH}（停止跟踪）`);
-  }
+  // web-search.json：本机被排除或含疑似密钥时，本机不推送、不覆盖，也不传播删除
+  const wsSkip = webSearchSkipReason(cfg);
+  if (wsSkip) notes.push(`!${REPO_WEBSEARCH} 未同步（${wsSkip}）`);
   for (const rel of new Set([...liveFiles.keys(), ...treeFiles.keys()])) {
     if (pending.has(`file:${rel}`)) continue;
+    if (rel === REPO_WEBSEARCH && wsSkip) continue;
     const lp = liveFiles.get(rel);
     const tp = treeFiles.get(rel);
     if (lp && tp) {
@@ -1244,6 +1307,7 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
       } catch {}
     }
   }
+  mirrorLegacyWebSearch();
   return { changed, notes };
 }
 
@@ -1345,6 +1409,8 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     writeJson(path.join(workDir(), REPO_STATE), state1);
     await commitIfDirty(`pi-sync: update from ${cfg.machineId}`);
     if (p1.notes.length) result.notes.push(`本机改动 ${p1.notes.length} 项`);
+    const wsReason = webSearchSkipReason(cfg);
+    if (wsReason) result.notes.push(`web-search.json 未同步（${wsReason}）`);
 
     // phase2：远端 -> 工作克隆
     const ref = await remoteRef();

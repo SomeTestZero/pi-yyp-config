@@ -43,10 +43,15 @@ pi          # 启动后执行：
 | 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装 |
 | 键位绑定 | `keybindings.json` | pi-sync 扩展 |
 | 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
+| 网页搜索设置 | pi-web-access 的生效 `web-search.json` ↔ `config/pi/web-search.json` | pi-sync 扩展（整文件；默认同步） |
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播（任一台机器删了插件/文件/配置键，其他机器下次同步时同样删除）。
 
-**永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
+**web-search.json 的路径**：pi-web-access 按 `PI_CODING_AGENT_DIR` → `$XDG_CONFIG_HOME/pi`（有则优先，其次历史路径 `~/.pi`）→ `~/.pi/agent` 的顺序解析配置目录，pi-sync 复刻同一规则，只同步本机真正生效的那一份；历史路径文件如果存在，会跟随生效路径保持一致。
+
+默认同步的字段通常只有 `workflow`（`none` = 不弹浏览器策展、`auto-summary` = 模型生成摘要不弹浏览器、`summary-review` = 打开浏览器策展页）。**含疑似密钥的机器会被自动跳过**（不推送、不被远端覆盖、也不传播删除），提示会出现在同步摘要里；如需显式排除用 `sync.excludeFiles`。
+
+**永不同步**：`auth.json`（凭证）、`trust.json`、`sessions/`、`models-store.json`、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
 
 ## 配置
@@ -60,10 +65,22 @@ pi          # 启动后执行：
     "enabled": true,     // 总开关
     "autoSync": true,    // 启动拉取 + 退出推送
     "excludeKeys": [],   // 额外排除的 settings 键
-    "includeFiles": []   // 额外纳入的文件，如 ["web-search.json"]
+    "includeFiles": [],  // （已无实际用途，保留兼容；web-search.json 现在默认同步）
+    "excludeFiles": []   // 显式排除的文件，如 ["web-search.json"]
   }
 }
 ```
+
+## 网页搜索不弹浏览器
+
+pi-web-access 的 `web_search` 默认工作流是 `summary-review`：它会在本机起一个策展页（Windows/Linux 下调用默认浏览器打开，macOS 有 glimpse 时弹 TUI 小窗）等你确认摘要。不想看到浏览器，就在 pi-web-access 真正读取的配置里把工作流设成 `none`（纯搜索结果）或 `auto-summary`（模型生成摘要，不开浏览器）：
+
+```jsonc
+// 生效路径（Windows / 未设 XDG_CONFIG_HOME 时）：~/.pi/agent/web-search.json
+{ "workflow": "none" }
+```
+
+改完 `/reload` 生效；该文件已由 pi-sync 默认同步，配置一次即全机同步。也可以随时用 `/curator off|auto-summary|on` 切换（它会写入同一个文件）。
 
 ## 安全须知
 
