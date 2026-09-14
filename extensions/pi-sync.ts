@@ -1,7 +1,7 @@
 /**
  * pi-sync — pi 多机配置/插件同步扩展
  *
- * 用一个私有 git 仓库作为唯一同步源，在多台山电脑之间同步：
+ * 用一个私有 git 仓库作为唯一同步源，在多台电脑之间同步：
  *   - settings.json（顶层键级三方合并，packages 并集，排除键不同步）
  *   - keybindings.json（整文件三方合并）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）

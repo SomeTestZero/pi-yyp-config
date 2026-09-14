@@ -7,19 +7,42 @@ yyp 的个人 pi 配置仓库：**一个 GitHub 私有仓库同步所有 pi 配�
 1. **pi 包**（`extensions/` 下的扩展通过 pi 包机制分发，含同步扩展 `pi-sync`）
 2. **配置备份库**（`config/` 下存放各机共享的配置快照与合并元数据）
 
+> ⚠️ 复制命令前先分清两类，**不要混在同一个代码块里粘**：
+> - **终端命令**：`pi install ...` / `pi update ...`（在 shell 里执行）
+> - **pi 内斜杠命令**：`/sync ...` / `/reload`（在 pi 的输入框里敲，shell 里执行会报 command not found）
+
 ## 快速上手
 
-### 新机器接入（一键）
+### 新机器接入
+
+前置：本机已配置能访问该私有仓库的 SSH key（`ssh -T git@github.com` 有回应，且账号对仓库有权限）。
+
+**① 终端里装包**（含同步扩展 pi-sync）：
 
 ```bash
-pi install git:git@github.com:SomeTestZero/pi-yyp-config
-pi          # 启动后执行：
+pi install git:git@github.com:SomeTestZero/pi-yyp-config.git
+```
+
+**② 启动 pi，在 pi 输入框里执行**：
+
+```text
 /sync init git@github.com:SomeTestZero/pi-yyp-config.git --mode=remote
 ```
 
-`--mode=remote` 表示以远端为准（推荐新机器）；在配置最全的主力机上首次建仓用 `--mode=local`。
+它把仓库克隆到 `~/.pi/sync-repo`，按「以远端为准」把共享配置落地本机；看到「配置已就位」后执行 `/reload`（或重开 pi）生效。
 
-### 日常：零操作
+- 仓库地址已内置在扩展里，所以只敲 `/sync init` 再回车确认也行（默认就是本仓库）。
+- `--mode=remote`：以远端为准（推荐新机器）。`--mode=local`：以本机为准，用于在配置最全的主力机上首次建仓。
+
+### 包资源更新
+
+`extensions/`、`skills/`、`prompts/`、`themes/` 走 pi 包机制分发，配置同步不会替你更新代码，需要时在终端执行：
+
+```bash
+pi update --extensions
+```
+
+## 日常：零操作
 
 - **启动 pi** → 自动拉取并合并其他机器的改动（通知栏给摘要）
 - **改了配置、装/删了插件** → **退出 pi 时自动推送**
@@ -27,12 +50,13 @@ pi          # 启动后执行：
 
 ### 命令
 
-| 命令 | 作用 |
-| --- | --- |
-| `/sync` | 一键同步：拉取 → 合并 → 推送（交互解决冲突） |
-| `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
-| `/sync push` / `/sync pull` | 单向操作 |
-| `/sync on` / `/sync off` | 开关本机的自动同步 |
+| 命令 | 在哪敲 | 作用 |
+| --- | --- | --- |
+| `/sync` | pi 内 | 一键同步：拉取 → 合并 → 推送（交互解决冲突） |
+| `/sync status` | pi 内 | 查看本机与远端差异、待解决冲突、机器列表 |
+| `/sync push` / `/sync pull` | pi 内 | 单向操作 |
+| `/sync on` / `/sync off` | pi 内 | 开关本机的自动同步 |
+| `/sync init [repo] [--mode=remote\|local]` | pi 内 | 新机器初始化（克隆到 `~/.pi/sync-repo`） |
 
 ## 同步范围
 
@@ -47,6 +71,13 @@ pi          # 启动后执行：
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播（任一台机器删了插件/文件/配置键，其他机器下次同步时同样删除）。
 
+**包来源写法**（`packages` 数组）：
+
+- 推荐 `git:git@github.com:SomeTestZero/pi-yyp-config.git`：SSH 克隆，复用本机 SSH key，私有仓库必需。
+- `git:git@github.com:SomeTestZero/pi-yyp-config`（不带 `.git`）等价，pi 与 pi-sync 都会归一化成同一个包，不会装重。
+- `git:github.com/SomeTestZero/pi-repo`（不带协议）会被 pi 当成 **HTTPS** 克隆，只适用于公开仓库。
+- 装的是哪个字符串，`settings.json` 里就存哪个字符串：以你 `pi install` 时敲的为准，想统一写法就统一敲带 `.git` 的 SSH 形式。
+
 **web-search.json 的路径**：pi-web-access 按 `PI_CODING_AGENT_DIR` → `$XDG_CONFIG_HOME/pi`（有则优先，其次历史路径 `~/.pi`）→ `~/.pi/agent` 的顺序解析配置目录，pi-sync 复刻同一规则，只同步本机真正生效的那一份；历史路径文件如果存在，会跟随生效路径保持一致。
 
 默认同步的字段通常只有 `workflow`（`none` = 不弹浏览器策展、`auto-summary` = 模型生成摘要不弹浏览器、`summary-review` = 打开浏览器策展页）。**含疑似密钥的机器会被自动跳过**（不推送、不被远端覆盖、也不传播删除），提示会出现在同步摘要里；如需显式排除用 `sync.excludeFiles`。
@@ -56,7 +87,7 @@ pi          # 启动后执行：
 
 ## 配置
 
-`~/.pi/agent/settings.json`（`sync` 键本机有效，不参与同步）：
+`~/.pi/agent/settings.json` 的 `sync` 键（**本机有效，不参与同步**）：
 
 ```jsonc
 {
@@ -64,12 +95,15 @@ pi          # 启动后执行：
     "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
     "enabled": true,     // 总开关
     "autoSync": true,    // 启动拉取 + 退出推送
+    "machineId": "",     // 机器标识，默认取主机名；同名主机会互相覆盖
     "excludeKeys": [],   // 额外排除的 settings 键
-    "includeFiles": [],  // （已无实际用途，保留兼容；web-search.json 现在默认同步）
+    "includeFiles": [],  // 已无实际用途，仅保留兼容（web-search.json 现在默认同步）
     "excludeFiles": []   // 显式排除的文件，如 ["web-search.json"]
   }
 }
 ```
+
+工作克隆固定放在 `~/.pi/sync-repo`（可用 `PI_SYNC_HOME` / `PI_SYNC_WORK` 环境变量覆盖，便于测试）。
 
 ## 网页搜索不弹浏览器
 
@@ -88,7 +122,8 @@ pi-web-access 的 `web_search` 默认工作流是 `summary-review`：它会在�
 
 - **仓库必须保持私有**。配置快照中虽不含 auth.json，但包含可执行的扩展代码——有仓库写权限等于能在所有机器上执行代码。
 - git 认证复用系统 SSH key，扩展不接触任何 token。
+- web-search.json 里的 API key 不会被同步（见上），请勿把它手动塞进本仓库。
 
 ## 旧脚本
 
-`scripts/pi-sync`（bash/ps1）是 v0 方案，已被 pi-sync 扩展取代，保留一个版本周期后移除。
+`scripts/pi-sync`（bash）与 `scripts/pi-sync.ps1`（PowerShell）是 v0 方案，已被 pi-sync 扩展取代，保留一个版本周期后移除。
