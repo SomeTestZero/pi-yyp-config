@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-14T04:54:25.264Z"
+      "lastSeen": "2026-09-14T05:02:54.649Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-09T06:05:59.588Z"
@@ -60,6 +60,10 @@
     "git:github.com/sometestzero/pi-todo-list": {
       "ts": 1789306254858,
       "machine": "VM-0-13-ubuntu"
+    },
+    "git:github.com/sometestzero/pi-yyp-config": {
+      "ts": 1789362174639,
+      "machine": "yyp-home-pc"
     }
   },
   "files": {
