@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-14T05:02:54.649Z"
+      "lastSeen": "2026-09-14T05:03:19.089Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-09T06:05:59.588Z"
@@ -26,12 +26,12 @@
   },
   "packages": {
     "git:github.com/sometestzero/pi-token-speed": {
-      "ts": 1788433644050,
+      "ts": 1789362199079,
       "machine": "yyp-home-pc"
     },
     "git:github.com/sometestzero/pi-infcode-bridge": {
-      "ts": 1788504678499,
-      "machine": "NEU-20230908KJS"
+      "ts": 1789362199079,
+      "machine": "yyp-home-pc"
     },
     "git:github.com/sometestzero/pi-comm-relay": {
       "ts": 1788758972820,
