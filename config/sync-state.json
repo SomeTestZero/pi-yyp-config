@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-14T06:31:45.170Z"
+      "lastSeen": "2026-09-14T07:19:47.867Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-09T06:05:59.588Z"
@@ -16,12 +16,12 @@
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1789307566868,
-      "machine": "VM-0-13-ubuntu"
+      "ts": 1789370387861,
+      "machine": "yyp-home-pc"
     },
     "defaultModel": {
-      "ts": 1789307566868,
-      "machine": "VM-0-13-ubuntu"
+      "ts": 1789370387861,
+      "machine": "yyp-home-pc"
     }
   },
   "packages": {
