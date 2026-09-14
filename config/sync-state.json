@@ -8,17 +8,17 @@
       "lastSeen": "2026-09-09T06:05:59.588Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-09-13T13:06:59.976Z"
+      "lastSeen": "2026-09-13T15:34:50.141Z"
     }
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1788655745115,
-      "machine": "yyp-home-pc"
+      "ts": 1789307566868,
+      "machine": "VM-0-13-ubuntu"
     },
     "defaultModel": {
-      "ts": 1788655745115,
-      "machine": "yyp-home-pc"
+      "ts": 1789307566868,
+      "machine": "VM-0-13-ubuntu"
     }
   },
   "packages": {
@@ -45,6 +45,18 @@
     "npm:pi-goal-x": {
       "ts": 1789304313065,
       "machine": "VM-0-13-ubuntu"
+    },
+    "npm:@narumitw/pi-btw": {
+      "ts": 1789305713365,
+      "machine": "VM-0-13-ubuntu"
+    },
+    "npm:@narumitw/pi-plan-mode": {
+      "ts": 1789305713365,
+      "machine": "VM-0-13-ubuntu"
+    },
+    "git:github.com/sometestzero/pi-todo-list": {
+      "ts": 1789306254858,
+      "machine": "VM-0-13-ubuntu"
     }
   },
   "files": {
@@ -57,11 +69,7 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/extensions/relays.json": {
-      "ts": 1788758972820,
-      "machine": "yyp-home-pc"
-    },
-    "config/pi/agent/extensions/todo.ts": {
-      "ts": 1789304727633,
+      "ts": 1789313690140,
       "machine": "VM-0-13-ubuntu"
     }
   },
@@ -77,6 +85,18 @@
       "id": "config/pi/agent/extensions/llm-gateway.ts",
       "ts": 1788758972820,
       "machine": "yyp-home-pc"
+    },
+    {
+      "type": "file",
+      "id": "config/pi/agent/extensions/todo.ts",
+      "ts": 1789306254858,
+      "machine": "VM-0-13-ubuntu"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-markdown-preview",
+      "ts": 1789307566868,
+      "machine": "VM-0-13-ubuntu"
     }
   ]
 }

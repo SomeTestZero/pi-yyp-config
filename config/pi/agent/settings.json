@@ -5,9 +5,12 @@
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
     "git:git@github.com:SomeTestZero/pi-comm-relay.git",
     "git:git@github.com:SomeTestZero/pi-infcode-bridge",
+    "git:git@github.com:SomeTestZero/pi-todo-list.git",
     "git:git@github.com:SomeTestZero/pi-token-speed",
     "git:github.com/SomeTestZero/pi-volcengine-plans",
     "git:git@github.com:SomeTestZero/pi-yyp-config",
+    "npm:@narumitw/pi-btw",
+    "npm:@narumitw/pi-plan-mode",
     "npm:pi-background-tasks",
     "npm:pi-goal-x",
     "npm:pi-subagents",
@@ -15,6 +18,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "kimi-coding",
-  "defaultModel": "k3"
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-flash"
 }
