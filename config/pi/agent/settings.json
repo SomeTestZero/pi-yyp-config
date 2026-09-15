@@ -4,11 +4,11 @@
   "packages": [
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
     "git:git@github.com:SomeTestZero/pi-comm-relay.git",
-    "git:git@github.com:SomeTestZero/pi-infcode-bridge",
+    "git:git@github.com:SomeTestZero/pi-infcode-bridge.git",
     "git:git@github.com:SomeTestZero/pi-todo-list.git",
-    "git:git@github.com:SomeTestZero/pi-token-speed",
+    "git:git@github.com:SomeTestZero/pi-token-speed.git",
     "git:github.com/SomeTestZero/pi-volcengine-plans",
-    "git:git@github.com:SomeTestZero/pi-yyp-config",
+    "git:git@github.com:SomeTestZero/pi-yyp-config.git",
     "npm:@narumitw/pi-btw",
     "npm:@narumitw/pi-plan-mode",
     "npm:pi-background-tasks",
@@ -18,6 +18,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "kimi-coding",
-  "defaultModel": "k3"
+  "defaultProvider": "volcengine-plan",
+  "defaultModel": "glm-5.3-flash"
 }
