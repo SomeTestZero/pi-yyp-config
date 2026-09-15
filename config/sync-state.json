@@ -11,17 +11,17 @@
       "lastSeen": "2026-09-13T15:34:50.141Z"
     },
     "C20251212115562": {
-      "lastSeen": "2026-09-14T04:34:50.227Z"
+      "lastSeen": "2026-09-15T05:09:48.124Z"
     }
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1789307566868,
-      "machine": "VM-0-13-ubuntu"
+      "ts": 1789448988116,
+      "machine": "C20251212115562"
     },
     "defaultModel": {
-      "ts": 1789307566868,
-      "machine": "VM-0-13-ubuntu"
+      "ts": 1789448988116,
+      "machine": "C20251212115562"
     }
   },
   "packages": {

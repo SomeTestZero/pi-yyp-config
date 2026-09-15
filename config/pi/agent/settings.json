@@ -18,6 +18,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "deepseek",
-  "defaultModel": "deepseek-flash"
+  "defaultProvider": "kimi-coding",
+  "defaultModel": "k3"
 }
