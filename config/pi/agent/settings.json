@@ -18,6 +18,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "volcengine-plan",
+  "defaultProvider": "volcengine-agentplan",
   "defaultModel": "glm-5.3-flash"
 }
