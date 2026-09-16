@@ -11,17 +11,17 @@
       "lastSeen": "2026-09-13T15:34:50.141Z"
     },
     "C20251212115562": {
-      "lastSeen": "2026-09-14T04:34:50.227Z"
+      "lastSeen": "2026-09-15T05:10:27.134Z"
     }
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1789370387861,
-      "machine": "yyp-home-pc"
+      "ts": 1789448988116,
+      "machine": "C20251212115562"
     },
     "defaultModel": {
-      "ts": 1789370387861,
-      "machine": "yyp-home-pc"
+      "ts": 1789448988116,
+      "machine": "C20251212115562"
     }
   },
   "packages": {
@@ -78,10 +78,6 @@
     "config/pi/agent/extensions/relays.json": {
       "ts": 1789313690140,
       "machine": "VM-0-13-ubuntu"
-    },
-    "config/pi/web-search.json": {
-      "ts": 1789361665259,
-      "machine": "yyp-home-pc"
     }
   },
   "tombstones": [
