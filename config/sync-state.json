@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-16T08:58:21.685Z"
+      "lastSeen": "2026-09-16T09:15:23.899Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-09T06:05:59.588Z"
@@ -37,28 +37,12 @@
       "ts": 1788758972820,
       "machine": "yyp-home-pc"
     },
-    "npm:pi-background-tasks": {
-      "ts": 1789304313065,
-      "machine": "VM-0-13-ubuntu"
-    },
-    "npm:pi-subagents": {
-      "ts": 1789304313065,
-      "machine": "VM-0-13-ubuntu"
-    },
     "npm:pi-goal-x": {
       "ts": 1789304313065,
       "machine": "VM-0-13-ubuntu"
     },
     "npm:@narumitw/pi-btw": {
       "ts": 1789305713365,
-      "machine": "VM-0-13-ubuntu"
-    },
-    "npm:@narumitw/pi-plan-mode": {
-      "ts": 1789305713365,
-      "machine": "VM-0-13-ubuntu"
-    },
-    "git:github.com/sometestzero/pi-todo-list": {
-      "ts": 1789306254858,
       "machine": "VM-0-13-ubuntu"
     },
     "git:github.com/sometestzero/pi-yyp-config": {
@@ -104,6 +88,30 @@
       "id": "npm:pi-markdown-preview",
       "ts": 1789307566868,
       "machine": "VM-0-13-ubuntu"
+    },
+    {
+      "type": "package",
+      "id": "git:github.com/sometestzero/pi-todo-list",
+      "ts": 1789550123895,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:@narumitw/pi-plan-mode",
+      "ts": 1789550123895,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-background-tasks",
+      "ts": 1789550123895,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-subagents",
+      "ts": 1789550123895,
+      "machine": "yyp-home-pc"
     }
   ]
 }
