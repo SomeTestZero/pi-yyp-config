@@ -4,10 +4,12 @@
   "packages": [
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
     "git:git@github.com:SomeTestZero/pi-comm-relay.git",
-    "git:git@github.com:SomeTestZero/pi-infcode-bridge",
-    "git:git@github.com:SomeTestZero/pi-token-speed",
+    "git:git@github.com:SomeTestZero/pi-infcode-bridge.git",
+    "git:git@github.com:SomeTestZero/pi-token-speed.git",
     "git:github.com/SomeTestZero/pi-volcengine-plans",
-    "git:git@github.com:SomeTestZero/pi-yyp-config",
+    "git:git@github.com:SomeTestZero/pi-yyp-config.git",
+    "npm:@narumitw/pi-btw",
+    "npm:pi-goal-x",
     "npm:pi-web-access"
   ],
   "theme": "dark",
