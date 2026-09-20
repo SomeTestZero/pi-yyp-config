@@ -14,6 +14,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "deepseek",
-  "defaultModel": "deepseek-flash"
+  "defaultProvider": "volcengine-agentplan",
+  "defaultModel": "glm-5.3-flash"
 }
