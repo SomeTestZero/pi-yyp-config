@@ -14,6 +14,6 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "kimi-coding",
-  "defaultModel": "k3"
+  "defaultProvider": "volcengine-agentplan",
+  "defaultModel": "glm-5.3-flash"
 }
