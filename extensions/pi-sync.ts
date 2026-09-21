@@ -116,6 +116,12 @@ interface SyncState {
   packages: Record<string, Meta>;
   files: Record<string, Meta>;
   tombstones: Tombstone[];
+  /** 每台机器确认「本机曾拥有」的包/键/文件（区分「从未安装」与「用户删除」，v1.3 起） */
+  accepted?: {
+    packages?: Record<string, Record<string, number>>;
+    settings?: Record<string, Record<string, number>>;
+    files?: Record<string, Record<string, number>>;
+  };
 }
 
 export interface SyncConfig {
@@ -152,7 +158,15 @@ type Side = Record<string, unknown>;
 // ---------------------------------------------------------------------------
 
 function emptyState(): SyncState {
-  return { version: 1, machines: {}, settings: {}, packages: {}, files: {}, tombstones: [] };
+  return {
+    version: 1,
+    machines: {},
+    settings: {},
+    packages: {},
+    files: {},
+    tombstones: [],
+    accepted: { packages: {}, settings: {}, files: {} },
+  };
 }
 
 export function stableStringify(v: unknown): string {
@@ -379,6 +393,25 @@ export function mergeStates(a: SyncState, b: SyncState): SyncState {
     if (!prev || t.ts >= prev.ts) tombMap.set(key, t);
   }
   out.tombstones = [...tombMap.values()];
+  out.accepted = {
+    packages: mergeAcceptedMaps(a.accepted?.packages, b.accepted?.packages),
+    settings: mergeAcceptedMaps(a.accepted?.settings, b.accepted?.settings),
+    files: mergeAcceptedMaps(a.accepted?.files, b.accepted?.files),
+  };
+  return out;
+}
+
+/** accepted 记账合并：按 (machine, id) 取时间戳较大者 */
+function mergeAcceptedMaps(
+  x?: Record<string, Record<string, number>>,
+  y?: Record<string, Record<string, number>>,
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const m of new Set([...Object.keys(x ?? {}), ...Object.keys(y ?? {})])) {
+    const merged: Record<string, number> = { ...(x?.[m] ?? {}) };
+    for (const [id, ts] of Object.entries(y?.[m] ?? {})) merged[id] = Math.max(merged[id] ?? 0, ts);
+    out[m] = merged;
+  }
   return out;
 }
 
@@ -864,6 +897,42 @@ export function mergePackageLists(opts: {
 // phase1：本机改动 -> 工作克隆（2-way，记录时间戳与墓碑）
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 本机拥有记账（accepted）：区分「从未安装/尚未落盘」与「用户真的删除了」
+// ---------------------------------------------------------------------------
+
+type AcceptedKind = "packages" | "settings" | "files";
+
+/** 幂等记账：把给定 id 标记为本机拥有 */
+function ensureAccepted(
+  state: SyncState,
+  kind: AcceptedKind,
+  machine: string,
+  ids: Iterable<string>,
+  now: number,
+): void {
+  if (!state.accepted) state.accepted = { packages: {}, settings: {}, files: {} };
+  const bucket = (state.accepted[kind] ??= {});
+  bucket[machine] = bucket[machine] ?? {};
+  for (const id of ids) {
+    if (bucket[machine][id] === undefined) bucket[machine][id] = now;
+  }
+}
+
+/** 本机是否曾拥有：以 accepted 记账为准；旧状态文件回退到「元数据由本机最后写入」或本机安装目录存在 */
+function locallyHad(state: SyncState, kind: AcceptedKind, machine: string, id: string, src?: string): boolean {
+  if (state.accepted?.[kind]?.[machine]?.[id] !== undefined) return true;
+  if (kind !== "packages") {
+    const meta = kind === "settings" ? state.settings[id] : state.files[id];
+    return !!(meta && meta.machine === machine);
+  }
+  const meta = state.packages[id];
+  if (meta && meta.machine === machine) return true;
+  if (id.startsWith("npm:")) return fs.existsSync(path.join(agentDir(), "npm", "node_modules", id.slice(4)));
+  const rel = src ? gitCloneRelDir(src) : null;
+  return !!rel && fs.existsSync(path.join(agentDir(), "git", rel));
+}
+
 function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { changed: boolean; notes: string[] } {
   const now = Date.now();
   const machine = cfg.machineId;
@@ -876,6 +945,15 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   const live = (readJson(liveSettingsPath()) ?? {}) as Side;
   const treePath = path.join(workDir(), REPO_SETTINGS);
   const tree = (readJson(treePath) ?? {}) as Side;
+
+  // 记账：本机 live 中实际存在的键视为本机拥有（幂等，首跑为存量配置补记账）
+  ensureAccepted(
+    state,
+    "settings",
+    machine,
+    Object.keys(live).filter((k) => !excluded.has(k)),
+    now,
+  );
 
   const keys = new Set([...Object.keys(live), ...Object.keys(tree)]);
   for (const k of keys) {
@@ -890,6 +968,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       changed = true;
       notes.push(`${hasT ? "~" : "+"}${k}`);
     } else if (!hasL && hasT) {
+      if (!locallyHad(state, "settings", machine, k)) continue; // 本机从未落盘（如刚合并进树、尚未 applyToLive）→ 不视为删除
       delete tree[k];
       delete state.settings[k];
       addTombstone(state, "setting", k, now, machine);
@@ -903,6 +982,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   const treePkgs = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
   const liveById = new Map(livePkgs.map((e) => [packageId(entrySource(e)), e]));
   const treeById = new Map(treePkgs.map((e) => [packageId(entrySource(e)), e]));
+  ensureAccepted(state, "packages", machine, liveById.keys(), now);
   let pkgChanged = false;
   for (const id of new Set([...liveById.keys(), ...treeById.keys()])) {
     const inL = liveById.has(id);
@@ -915,6 +995,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       notes.push(`${inT ? "~" : "+"}包 ${id}`);
     } else if (!inL && inT) {
       if (id === protectedId) continue; // 同步扩展自身所在的包不允许被删除传播
+      if (!locallyHad(state, "packages", machine, id, entrySource(treeById.get(id)!))) continue; // 从未在本机安装 → 不视为删除
       treeById.delete(id);
       delete state.packages[id];
       addTombstone(state, "package", id, now, machine);
@@ -934,6 +1015,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   // 文件（keybindings / web-search / extensions）
   const liveFiles = collectLiveFiles(cfg);
   const treeFiles = collectTreeFiles(cfg);
+  ensureAccepted(state, "files", machine, liveFiles.keys(), now);
   // web-search.json 未显式启用时停止跟踪（脚本时代遗留，可能含 API key）
   if (!cfg.includeFiles.includes("web-search.json") && treeFiles.has(REPO_WEBSEARCH)) {
     fs.unlinkSync(treeFiles.get(REPO_WEBSEARCH)!);
@@ -963,6 +1045,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       changed = true;
       notes.push(`+文件 ${rel}`);
     } else if (!lp && tp) {
+      if (!locallyHad(state, "files", machine, rel)) continue; // 本机从未有过（如远端新增尚未落地）→ 不视为删除
       fs.unlinkSync(tp);
       delete state.files[rel];
       addTombstone(state, "file", rel, now, machine);
@@ -1201,6 +1284,8 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
   const notes: string[] = [];
   let changed = false;
   const excluded = excludedKeys(cfg);
+  const addedKeys = new Set<string>();
+  const addedFileRels = new Set<string>();
 
   // settings：保留本机排除键与被挂起键，其余以 tree 为准
   const liveP = liveSettingsPath();
@@ -1213,6 +1298,7 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
     if (!jsonEq(next[k], tree[k])) {
       next[k] = tree[k];
       changed = true;
+      if (k !== "packages") addedKeys.add(k);
     }
   }
   for (const k of Object.keys(live)) {
@@ -1238,6 +1324,7 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
     if (!fs.existsSync(lp) || !fs.readFileSync(lp).equals(fs.readFileSync(tp))) {
       fs.mkdirSync(path.dirname(lp), { recursive: true });
       fs.copyFileSync(tp, lp);
+      addedFileRels.add(rel);
       changed = true;
       notes.push(`文件落地 ${rel}`);
     }
@@ -1252,6 +1339,24 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
       } catch {}
     }
   }
+
+  // 记账：本次落盘新增的键/包/文件视为本机拥有（供 phase1 区分「未安装」与「用户删除」）
+  const stPath = path.join(workDir(), REPO_STATE);
+  const st = (readJson(stPath) as SyncState | null) ?? emptyState();
+  ensureAccepted(st, "settings", cfg.machineId, addedKeys, Date.now());
+  const treePkgList = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
+  const livePkgIds = new Set(
+    (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => packageId(entrySource(e))),
+  );
+  ensureAccepted(
+    st,
+    "packages",
+    cfg.machineId,
+    treePkgList.map((e) => packageId(entrySource(e))).filter((id) => !livePkgIds.has(id)),
+    Date.now(),
+  );
+  ensureAccepted(st, "files", cfg.machineId, addedFileRels, Date.now());
+  writeJson(stPath, st);
   return { changed, notes };
 }
 
@@ -1777,7 +1882,7 @@ export async function lanPush(
     if (r.failed.length) {
       ui?.notify(`pi-sync lan → ${host}：推送 ${r.pushed.length} 个；失败 ${r.failed.length}：${r.failed.join("，")}`, "warning");
     } else if (!opts.quiet) {
-      ui?.notify(`pi-sync lan → ${host}：${r.pushed.length} 个仓库已推送到内网镜像`, "info");
+      ui?.notify(`pi-sync lan → ${host}：${r.pushed.length} 个仓库已推送到内网镜像（对端下次全新启动 pi 时自动安装/更新）`, "info");
     }
   }
   return results;
