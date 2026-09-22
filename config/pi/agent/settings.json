@@ -15,5 +15,12 @@
   "theme": "dark",
   "tuiMode": "fullscreen",
   "defaultProvider": "volcengine-agentplan",
-  "defaultModel": "glm-5.3-flash"
+  "defaultModel": "glm-5.3-flash",
+  "compaction": {
+    "modelOverrides": {
+      "volcengine-agentplan/glm-5.3-flash": {
+        "reserveTokens": 65536
+      }
+    }
+  }
 }
