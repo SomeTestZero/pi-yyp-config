@@ -5,7 +5,7 @@
       "lastSeen": "2026-09-22T02:10:14.572Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-09-17T06:00:54.045Z"
+      "lastSeen": "2026-09-21T10:40:41.299Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-09-13T15:34:50.141Z"
@@ -62,10 +62,6 @@
     "config/pi/agent/extensions/relays.json": {
       "ts": 1789313690140,
       "machine": "VM-0-13-ubuntu"
-    },
-    "config/pi/web-search.json": {
-      "ts": 1789641053687,
-      "machine": "yyp-home-pc"
     }
   },
   "tombstones": [
