@@ -17,8 +17,21 @@
   "defaultProvider": "volcengine-agentplan",
   "defaultModel": "glm-5.3-flash",
   "compaction": {
+    "reserveTokens": 32768,
     "modelOverrides": {
+      "volcengine-agentplan/glm-5.3": {
+        "reserveTokens": 65536
+      },
       "volcengine-agentplan/glm-5.3-flash": {
+        "reserveTokens": 65536
+      },
+      "volcengine-plan/glm-5.3": {
+        "reserveTokens": 65536
+      },
+      "volcengine-plan/glm-5.3-flash": {
+        "reserveTokens": 65536
+      },
+      "neu-llm-gateway/moma_glm-5.3": {
         "reserveTokens": 65536
       }
     }
