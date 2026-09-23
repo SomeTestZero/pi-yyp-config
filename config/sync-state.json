@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-22T23:54:49.844Z"
+      "lastSeen": "2026-09-23T00:24:29.847Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-21T10:40:41.299Z"
@@ -16,11 +16,11 @@
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1789870861985,
+      "ts": 1790123069840,
       "machine": "yyp-home-pc"
     },
     "defaultModel": {
-      "ts": 1789870861985,
+      "ts": 1790123069840,
       "machine": "yyp-home-pc"
     },
     "compaction": {

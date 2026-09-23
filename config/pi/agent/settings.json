@@ -14,8 +14,8 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "volcengine-agentplan",
-  "defaultModel": "glm-5.3-flash",
+  "defaultProvider": "xiaomi-token-plan-cn",
+  "defaultModel": "mimo-v2.6-pro",
   "compaction": {
     "reserveTokens": 32768,
     "modelOverrides": {
