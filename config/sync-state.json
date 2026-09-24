@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-24T10:39:31.300Z"
+      "lastSeen": "2026-09-24T11:21:22.426Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-21T10:40:41.299Z"
@@ -51,6 +51,10 @@
     },
     "git:github.com/sometestzero/pi-yyp-config": {
       "ts": 1789362174639,
+      "machine": "yyp-home-pc"
+    },
+    "git:github.com/sometestzero/pi-lite-recap": {
+      "ts": 1790248882421,
       "machine": "yyp-home-pc"
     }
   },
