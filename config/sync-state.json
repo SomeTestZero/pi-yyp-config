@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-09-30T03:39:42.753Z"
+      "lastSeen": "2026-09-30T03:57:45.302Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-09-21T10:40:41.299Z"
@@ -68,8 +68,8 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/extensions/relays.json": {
-      "ts": 1789313690140,
-      "machine": "VM-0-13-ubuntu"
+      "ts": 1790740665296,
+      "machine": "yyp-home-pc"
     }
   },
   "tombstones": [

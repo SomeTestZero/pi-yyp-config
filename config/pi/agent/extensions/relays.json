@@ -19,6 +19,13 @@
       // 平台规定 claude 系列只能走 /v1/messages（Anthropic 协议）
       "anthropicMessages": ["^claude-"],
 
+      // ⚠️ 两种协议的 baseUrl 约定不同（pi-ai 直接把 baseUrl 交给 SDK 当 baseURL）：
+      //   - OpenAI 协议：SDK 拼 /chat/completions，所以 baseUrl 要带 /v1 → …/v1/chat/completions
+      //   - Anthropic 协议：SDK 自己拼 /v1/messages，baseUrl 不能带 /v1
+      // 否则 claude 系列会打到 /v1/v1/messages，报 404 "Invalid URL (POST /v1/v1/messages)"。
+      // 这里用 baseUrlRules 给 claude 系列单独换不带 /v1 的根地址。
+      "baseUrlRules": { "^claude-": "https://api.mmh1.top" },
+
       // 生图模型（gpt-image-*）不是对话模型，排除出 /model 列表
       "exclude": ["^gpt-image"],
 
