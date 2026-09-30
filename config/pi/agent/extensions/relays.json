@@ -19,6 +19,13 @@
       // 平台规定 claude 系列只能走 /v1/messages（Anthropic 协议）
       "anthropicMessages": ["^claude-"],
 
+      // ⚠️ 两种协议的 baseUrl 约定不同（pi-ai 直接把 baseUrl 交给 SDK 当 baseURL）：
+      //   - OpenAI 协议：SDK 拼 /chat/completions，所以 baseUrl 要带 /v1 → …/v1/chat/completions
+      //   - Anthropic 协议：SDK 自己拼 /v1/messages，baseUrl 不能带 /v1
+      // 否则 claude 系列会打到 /v1/v1/messages，报 404 "Invalid URL (POST /v1/v1/messages)"。
+      // 这里用 baseUrlRules 给 claude 系列单独换不带 /v1 的根地址。
+      "baseUrlRules": { "^claude-": "https://api.mmh1.top" },
+
       // 生图模型（gpt-image-*）不是对话模型，排除出 /model 列表
       "exclude": ["^gpt-image"],
 
@@ -89,10 +96,10 @@
     }
 
     // 示例：内网 LLM 网关（http://10.105.1.5:4001/v1）
-    // 注意：现有 llm-gateway.ts 已注册同 id provider。若要迁移到本插件，
-    // 请先删除 llm-gateway.ts、把下面这段取消注释并改 "enabled": true。
-    // 迁移后模型清单随网关自动更新，无需再手改 llm-gateway.ts 的 MODELS 数组。
-    // 该网关对部分模型的 thinking 参数有特殊要求（见 llm-gateway.ts 顶部注释），
+    // 注意：现有 neu-llm-gateway.ts 已注册同 id provider。若要迁移到本插件，
+    // 请先删除 neu-llm-gateway.ts、把下面这段取消注释并改 "enabled": true。
+    // 迁移后模型清单随网关自动更新，无需再手改 neu-llm-gateway.ts 的 MODELS 数组。
+    // 该网关对部分模型的 thinking 参数有特殊要求（见 neu-llm-gateway.ts 顶部注释），
     // 迁移前请确认其 /v1/models 可用、且相关模型的 thinking 配置已写入 "models"。
     // {
     //   "id": "neu-llm-gateway",
@@ -100,9 +107,9 @@
     //   "enabled": false,
     //   "baseUrl": "http://10.105.1.5:4001/v1",
     //   "apiKey": "$LLM_GATEWAY_API_KEY",
-    //   "defaults": { "contextWindow": 131072, "maxTokens": 16384 },
+    //   "defaults": { "contextWindow": 262144, "maxTokens": 32768 },
     //   "models": {
-    //     "qwen3.6-27b": { "name": "Qwen3.6 27B", "reasoning": true }
+    //     "qwen3.8-27b": { "name": "Qwen3.8 27B", "reasoning": true }
     //   }
     // }
   ]
