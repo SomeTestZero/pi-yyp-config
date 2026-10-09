@@ -3,6 +3,7 @@
   "hideThinkingBlock": false,
   "packages": [
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
+    "git:github.com/SomeTestZero/pi-ask-user-question",
     "git:git@github.com:SomeTestZero/pi-comm-relay.git",
     "git:git@github.com:SomeTestZero/pi-infcode-bridge.git",
     "git:git@github.com:SomeTestZero/pi-lite-recap.git",
