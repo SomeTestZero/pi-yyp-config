@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-10T02:12:07.125Z"
+      "lastSeen": "2026-10-10T06:25:23.706Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-10T02:05:18.357Z"
@@ -129,5 +129,42 @@
       "ts": 1789550123895,
       "machine": "yyp-home-pc"
     }
-  ]
+  ],
+  "accepted": {
+    "packages": {
+      "yyp-home-pc": {
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1791613523703,
+        "git:github.com/sometestzero/pi-ask-user-question": 1791613523703,
+        "git:github.com/sometestzero/pi-comm-relay": 1791613523703,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1791613523703,
+        "git:github.com/sometestzero/pi-lite-recap": 1791613523703,
+        "git:github.com/sometestzero/pi-token-speed": 1791613523703,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1791613523703,
+        "git:github.com/sometestzero/pi-yyp-config": 1791613523703,
+        "npm:@narumitw/pi-btw": 1791613523703,
+        "npm:pi-goal-x": 1791613523703,
+        "npm:pi-web-access": 1791613523703
+      }
+    },
+    "settings": {
+      "yyp-home-pc": {
+        "defaultThinkingLevel": 1791613523703,
+        "hideThinkingBlock": 1791613523703,
+        "packages": 1791613523703,
+        "theme": 1791613523703,
+        "tuiMode": 1791613523703,
+        "defaultProvider": 1791613523703,
+        "defaultModel": 1791613523703,
+        "compaction": 1791613523703
+      }
+    },
+    "files": {
+      "yyp-home-pc": {
+        "config/pi/agent/keybindings.json": 1791613523703,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1791613523703,
+        "config/pi/agent/extensions/relays.auto.json": 1791613523703,
+        "config/pi/agent/extensions/relays.json": 1791613523703
+      }
+    }
+  }
 }
