@@ -5,7 +5,7 @@
       "lastSeen": "2026-10-10T06:25:23.706Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-10T02:05:18.357Z"
+      "lastSeen": "2026-10-10T02:19:58.720Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-09T12:43:44.076Z"
@@ -16,12 +16,12 @@
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1790123069840,
-      "machine": "yyp-home-pc"
+      "ts": 1791598117899,
+      "machine": "NEU-20230908KJS"
     },
     "defaultModel": {
-      "ts": 1790123069840,
-      "machine": "yyp-home-pc"
+      "ts": 1791598117899,
+      "machine": "NEU-20230908KJS"
     },
     "compaction": {
       "ts": 1790094878957,
