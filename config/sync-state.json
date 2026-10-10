@@ -5,7 +5,7 @@
       "lastSeen": "2026-10-10T02:12:07.125Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-09-21T10:40:41.299Z"
+      "lastSeen": "2026-10-10T02:05:18.357Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-09T12:43:44.076Z"
@@ -73,6 +73,10 @@
     },
     "config/pi/agent/extensions/relays.json": {
       "ts": 1790740665296,
+      "machine": "yyp-home-pc"
+    },
+    "config/pi/web-search.json": {
+      "ts": 1789641053687,
       "machine": "yyp-home-pc"
     }
   },
