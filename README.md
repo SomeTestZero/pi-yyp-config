@@ -61,11 +61,13 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 | --- | --- | --- |
 | 包资源（extensions/skills/prompts/themes） | 仓库根目录各目录 | pi 包机制（`pi update --extensions`） |
 | 全局设置 | `~/.pi/agent/settings.json` ↔ `config/pi/agent/settings.json` | pi-sync 扩展（顶层键级三方合并） |
-| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装 |
+| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装；装不上的**不写入本机 settings**，留待下次同步重试 |
 | 键位绑定 | `keybindings.json` | pi-sync 扩展 |
 | 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
+
+**故障语义**（v1.4 起）：本机 `settings.packages` 只写「已就绪」（已装好、pi 启动不会再触发自动补装）的条目；装失败/未安装的条目只保留在同步树与本机待装清单（`~/.pi/agent/pi-sync-wanted-packages.json`）里，每次同步自动重试。原因：pi 启动时会自动补装 settings 里缺失的包，而补装失败（如断网 `git clone`）会触发 unhandled rejection 直接崩溃退出——同步失败不应拖垮 pi 启动。
 
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。

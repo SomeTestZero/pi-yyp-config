@@ -17,6 +17,11 @@
  *
  * 自动同步（sync.autoSync，默认开）：session_start 后后台拉取合并；退出时若有本地改动则推送。
  *
+ * 故障语义：装不上/没装完的包不会写入本机 settings.packages（留在待装清单
+ * pi-sync-wanted-packages.json，每次同步自动重试）。pi 启动时因缺包自动补装
+ * 一旦失败（如断网 git clone）会触发 unhandled rejection 直接崩溃退出，因此
+ * 本机 settings 里只允许出现「已就绪」的包。
+ *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
  *               "enabled": true, "autoSync": true,
@@ -82,6 +87,9 @@ function liveExtDir(): string {
 }
 function pendingPath(): string {
   return path.join(agentDir(), "pi-sync-pending.json");
+}
+function wantedPath(): string {
+  return path.join(agentDir(), "pi-sync-wanted-packages.json");
 }
 function lockPath(): string {
   return path.join(agentDir(), "pi-sync.lock");
@@ -359,6 +367,102 @@ function isMaterialized(entry: unknown): boolean {
   return true;
 }
 
+/** 解析 npm 源的包名与版本范围（npm:foo@^1.2 / npm:@scope/name@1.2.3） */
+export function parseNpmSource(src: string): { name: string; range: string | null } {
+  const spec = src.startsWith("npm:") ? src.slice(4) : src;
+  const at = spec.startsWith("@") ? spec.indexOf("@", spec.indexOf("/")) : spec.indexOf("@");
+  return at > 0
+    ? { name: spec.slice(0, at), range: spec.slice(at + 1) || null }
+    : { name: spec, range: null };
+}
+
+/** 松散版本匹配：精确相等 / ^ 同主版本不低于 / ~ 同主次版本不低于 / x 通配；
+ *  无法比较的复杂范围（>=、|| 等）宽松视为满足，保证已装上的包不会被反复重装 */
+export function versionSatisfiesLoose(version: string, range: string): boolean {
+  const seg = (s: string) => (/^\d+$/.test(s) ? Number(s) : -1);
+  const cmp = (a: string[], b: string[]): number => {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const x = seg(a[i] ?? "0");
+      const y = seg(b[i] ?? "0");
+      if (x !== y) return x > y ? 1 : -1;
+    }
+    return 0;
+  };
+  const v = version.trim().replace(/^v/, "");
+  const r = range.trim().replace(/^v/, "");
+  if (!r || r === "*" || r === "x" || r === "latest") return true;
+  const kind = r[0] === "^" || r[0] === "~" ? r[0] : "";
+  const vp = v.split(".");
+  const rp = r.slice(kind ? 1 : 0).split(".");
+  if (!vp.every((p) => /^\d+$/.test(p))) return true;
+  if (!rp.every((p) => /^\d+$/.test(p) || p === "x" || p === "*")) return true;
+  const pinned = kind === "~" ? 2 : kind === "^" ? 1 : rp.length;
+  for (let i = 0; i < pinned && i < rp.length; i++) {
+    const want = seg(rp[i]);
+    if (want < 0) break; // x/* 通配段之后不再约束
+    if (seg(vp[i] ?? "0") !== want) return false;
+  }
+  return kind === "" ? true : cmp(vp, rp) >= 0;
+}
+
+/** 包是否「已就绪」：pi 启动时不会因它触发自动补装。
+ *  pi 核心的补装条件是：git/local 目标不存在，或 npm 目标不存在/版本不满足声明范围，
+ *  而补装失败是不被捕获的（unhandled rejection → 进程直接退出），所以写入本机
+ *  settings 的包必须先过这一关。 */
+export function isSettled(entry: unknown): boolean {
+  const src = entrySource(entry);
+  const id = packageId(src);
+  if (id.startsWith("npm:")) {
+    const { name, range } = parseNpmSource(src);
+    const pkg = readJson(path.join(agentDir(), "npm", "node_modules", name, "package.json")) as
+      | { version?: string }
+      | null;
+    if (!pkg?.version) return false;
+    return range ? versionSatisfiesLoose(pkg.version, range) : true;
+  }
+  return isMaterialized(entry);
+}
+
+/** packages 落盘策略：本机 settings 只写「已就绪」的条目；版本已变更但尚未更新
+ *  成功的条目先用旧条目顶着；完全没装上的条目记入 wanted 待重试清单。 */
+export function settlePackages(desired: unknown[]): { settled: unknown[]; wanted: Set<string> } {
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const liveById = new Map(
+    (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => [packageId(entrySource(e)), e]),
+  );
+  const settled: unknown[] = [];
+  const wanted = new Set<string>();
+  for (const entry of desired) {
+    const id = packageId(entrySource(entry));
+    if (isSettled(entry)) {
+      settled.push(entry);
+      continue;
+    }
+    wanted.add(id);
+    const prev = liveById.get(id);
+    if (prev && isSettled(prev)) settled.push(prev); // 更新未成功 → 旧条目顶着
+  }
+  return { settled, wanted };
+}
+
+/** 把刚装上的包条目（保持同步树里的原始形态）写回本机 settings.packages */
+function addLivePackageEntry(entry: unknown): void {
+  const p = liveSettingsPath();
+  const live = (readJson(p) ?? {}) as Side;
+  const list = Array.isArray(live.packages) ? [...(live.packages as unknown[])] : [];
+  const id = packageId(entrySource(entry));
+  const idx = list.findIndex((e) => packageId(entrySource(e)) === id);
+  if (idx >= 0) {
+    if (jsonEq(list[idx], entry)) return;
+    list[idx] = entry;
+  } else {
+    list.push(entry);
+  }
+  list.sort((x, y) => packageId(entrySource(x)).localeCompare(packageId(entrySource(y))));
+  live.packages = list;
+  writeJson(p, live);
+}
+
 // ---------------------------------------------------------------------------
 // 同步状态（sync-state.json）
 // ---------------------------------------------------------------------------
@@ -484,6 +588,28 @@ function savePending(pending: Set<string>): void {
     return;
   }
   writeJson(pendingPath(), { items: [...pending] });
+}
+
+// ---------------------------------------------------------------------------
+// 待安装包（装失败/尚未落盘）：本机机器态，不参与同步；期望清单以同步树为准
+// ---------------------------------------------------------------------------
+
+function loadWanted(): Set<string> {
+  const raw = readJson(wantedPath());
+  if (raw && typeof raw === "object" && Array.isArray((raw as Side).items)) {
+    return new Set((raw as { items: string[] }).items);
+  }
+  return new Set();
+}
+
+function saveWanted(wanted: Set<string>): void {
+  if (wanted.size === 0) {
+    try {
+      fs.unlinkSync(wantedPath());
+    } catch {}
+    return;
+  }
+  writeJson(wantedPath(), { items: [...wanted] });
 }
 
 // ---------------------------------------------------------------------------
@@ -933,7 +1059,12 @@ function locallyHad(state: SyncState, kind: AcceptedKind, machine: string, id: s
   return !!rel && fs.existsSync(path.join(agentDir(), "git", rel));
 }
 
-function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { changed: boolean; notes: string[] } {
+function phase1(
+  cfg: SyncConfig,
+  state: SyncState,
+  pending: Set<string>,
+): { changed: boolean; notes: string[] } {
+  const wanted = loadWanted();
   const now = Date.now();
   const machine = cfg.machineId;
   const notes: string[] = [];
@@ -995,6 +1126,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       notes.push(`${inT ? "~" : "+"}包 ${id}`);
     } else if (!inL && inT) {
       if (id === protectedId) continue; // 同步扩展自身所在的包不允许被删除传播
+      if (wanted.has(id)) continue; // 装失败/尚未落盘（pi-sync 暂扣）→ 不视为删除
       if (!locallyHad(state, "packages", machine, id, entrySource(treeById.get(id)!))) continue; // 从未在本机安装 → 不视为删除
       treeById.delete(id);
       delete state.packages[id];
@@ -1292,23 +1424,44 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
   const live = (readJson(liveP) ?? {}) as Side;
   const tree = (readJson(path.join(workDir(), REPO_SETTINGS)) ?? {}) as Side;
   const next: Side = { ...live };
+  let writtenPkgIds: string[] = [];
   for (const k of Object.keys(tree)) {
     if (excluded.has(k)) continue;
+    if (k === "packages") continue; // packages 单独处理：只落已就绪的包
     if (pending.has(`setting:${k}`)) continue;
     if (!jsonEq(next[k], tree[k])) {
       next[k] = tree[k];
       changed = true;
-      if (k !== "packages") addedKeys.add(k);
+      addedKeys.add(k);
     }
   }
   for (const k of Object.keys(live)) {
     if (excluded.has(k)) continue;
+    if (k === "packages") continue;
     if (pending.has(`setting:${k}`)) continue;
     if (!Object.prototype.hasOwnProperty.call(tree, k)) {
       delete next[k];
       changed = true;
     }
   }
+  // packages：只把「已就绪」的条目写入 settings；没装上的留在同步树里由
+  // materialize 重试，避免 pi 启动时自动补装失败（如断网 git clone）直接崩溃。
+  const wanted = new Set<string>();
+  if (Object.prototype.hasOwnProperty.call(tree, "packages")) {
+    const desired = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
+    const s = settlePackages(desired);
+    for (const id of s.wanted) wanted.add(id);
+    if (!jsonEq(Array.isArray(live.packages) ? live.packages : [], s.settled)) {
+      next.packages = s.settled;
+      changed = true;
+    }
+    writtenPkgIds = s.settled.map((e) => packageId(entrySource(e)));
+    if (wanted.size > 0) notes.push(`待安装包（联网后自动重试）: ${[...wanted].join("、")}`);
+  } else if (Object.prototype.hasOwnProperty.call(next, "packages")) {
+    delete next.packages;
+    changed = true;
+  }
+  saveWanted(wanted);
   if (changed) {
     writeJson(liveP, next);
     notes.push("settings.json 已更新");
@@ -1344,45 +1497,53 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
   const stPath = path.join(workDir(), REPO_STATE);
   const st = (readJson(stPath) as SyncState | null) ?? emptyState();
   ensureAccepted(st, "settings", cfg.machineId, addedKeys, Date.now());
-  const treePkgList = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
   const livePkgIds = new Set(
     (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => packageId(entrySource(e))),
   );
-  ensureAccepted(
-    st,
-    "packages",
-    cfg.machineId,
-    treePkgList.map((e) => packageId(entrySource(e))).filter((id) => !livePkgIds.has(id)),
-    Date.now(),
-  );
+  // 只把真正落盘的包记为本机拥有；待安装的包撤销旧版本的误记账，
+  // 否则 phase1 会把「没装上」误判为「用户删除」而传播墓碑
+  ensureAccepted(st, "packages", cfg.machineId, writtenPkgIds.filter((id) => !livePkgIds.has(id)), Date.now());
+  const acceptedPkgs = st.accepted?.packages?.[cfg.machineId];
+  if (acceptedPkgs) for (const id of wanted) delete acceptedPkgs[id];
   ensureAccepted(st, "files", cfg.machineId, addedFileRels, Date.now());
   writeJson(stPath, st);
   return { changed, notes };
 }
 
-/** 物化：按合并后的 packages 清单补装缺失/变更的包（复用 pi install） */
-async function materialize(prevLivePackages: unknown[], notes: string[], errors: string[]): Promise<void> {
+/** 物化：按同步树的 packages 清单补装缺失/变更的包（复用 pi install）。
+ *  装上的立即写回本机 settings 并移出待装清单；装失败的留下次同步重试，
+ *  不写入 settings，保证 pi 启动不会因自动补装失败而崩溃。 */
+async function materialize(notes: string[], errors: string[]): Promise<void> {
+  const wanted = loadWanted();
+  const tree = (readJson(path.join(workDir(), REPO_SETTINGS)) ?? {}) as Side;
+  const desired = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
   const live = (readJson(liveSettingsPath()) ?? {}) as Side;
-  const next = Array.isArray(live.packages) ? (live.packages as unknown[]) : [];
-  const prevById = new Map(prevLivePackages.map((e) => [packageId(entrySource(e)), e]));
-  const jobs: string[] = [];
-  for (const entry of next) {
+  const liveById = new Map(
+    (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => [packageId(entrySource(e)), e]),
+  );
+  const jobs: unknown[] = [];
+  for (const entry of desired) {
     const id = packageId(entrySource(entry));
-    const src = entrySource(entry);
-    const prev = prevById.get(id);
-    const sourceChanged = prev !== undefined && !jsonEq(prev, entry);
-    if (!isMaterialized(entry) || sourceChanged) {
-      if (!jobs.includes(src)) jobs.push(src);
+    const prev = liveById.get(id);
+    if (!isSettled(entry) || (prev !== undefined && !jsonEq(prev, entry))) {
+      if (!jobs.some((e) => packageId(entrySource(e)) === id)) jobs.push(entry);
     }
   }
-  for (const src of jobs) {
+  for (const entry of jobs) {
+    const src = entrySource(entry);
     const r = await runShell(`pi install --no-approve ${JSON.stringify(src)}`, {
       cwd: os.homedir(),
       timeout: INSTALL_TIMEOUT_MS,
     });
-    if (r.code === 0) notes.push(`已安装 ${src}`);
-    else errors.push(`安装失败 ${src}: ${(r.stderr || r.stdout).trim().slice(0, 120)}`);
+    if (r.code === 0) {
+      notes.push(`已安装 ${src}`);
+      addLivePackageEntry(entry);
+      wanted.delete(packageId(src));
+    } else {
+      errors.push(`安装失败（已记录，下次同步自动重试）${src}: ${(r.stderr || r.stdout).trim().slice(0, 120)}`);
+    }
   }
+  saveWanted(wanted);
   // 同步下来的扩展目录若有 package.json 而无 node_modules，补装依赖
   const extRoot = liveExtDir();
   const candidates = [extRoot, ...walkFiles(extRoot).filter((r) => r.endsWith("/package.json")).map((r) => path.join(extRoot, path.dirname(r)))];
@@ -1449,8 +1610,6 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       return result;
     }
     const pending = loadPending();
-    const prevLive = (readJson(liveSettingsPath()) ?? {}) as Side;
-    const prevLivePackages = Array.isArray(prevLive.packages) ? (prevLive.packages as unknown[]) : [];
 
     // phase1：本机改动 -> 工作克隆（phase1 就地修改 state1，随后落盘）
     const state1 = (readJson(path.join(workDir(), REPO_STATE)) as SyncState | null) ?? emptyState();
@@ -1570,7 +1729,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
 
     // 物化缺失/变更的包
     if (opts.materialize !== false) {
-      await materialize(prevLivePackages, result.notes, result.errors);
+      await materialize(result.notes, result.errors);
     }
 
     // 推送
@@ -1651,6 +1810,10 @@ export async function performInit(
       const selfEntry = curPkgs.find((e) => packageId(entrySource(e)) === selfId);
       if (!has && selfEntry) next.packages = [...nextPkgs, selfEntry];
     }
+    // 同 applyToLive：只落已就绪的包，没装上的留待 materialize 重试
+    const s = settlePackages(Array.isArray(next.packages) ? (next.packages as unknown[]) : []);
+    next.packages = s.settled;
+    saveWanted(s.wanted);
     writeJson(liveP, next);
     // 扩展文件并集落地（不删本机多出的文件）
     const treeFiles = collectTreeFiles(cfg);
@@ -1937,6 +2100,8 @@ async function statusText(cfg: SyncConfig): Promise<string> {
     .join("；");
   if (machines) lines.push(`机器: ${machines}`);
   if (pending.size > 0) lines.push(`⚠️ ${pending.size} 项冲突待解决（运行 /sync）`);
+  const wanted = loadWanted();
+  if (wanted.size > 0) lines.push(`⏳ ${wanted.size} 个包待安装（联网后自动重试）: ${[...wanted].slice(0, 6).join("、")}`);
   lines.push(`自动同步: ${cfg.enabled && cfg.autoSync ? "开" : "关"}`);
   return lines.join("\n");
 }
@@ -2002,7 +2167,8 @@ export default function (pi: ExtensionAPI) {
           repoUrl = await ui.input("同步仓库地址", DEFAULT_REPO);
           if (!repoUrl) return;
         }
-        let mode = modeFlag === "remote" || modeFlag === "local" ? modeFlag : undefined;
+        let mode: "remote" | "local" | undefined =
+          modeFlag === "remote" || modeFlag === "local" ? modeFlag : undefined;
         if (!mode) {
           if (!ctx.hasUI) {
             ui.notify("非交互模式请显式指定 --mode=remote 或 --mode=local", "error");

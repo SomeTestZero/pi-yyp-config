@@ -2,6 +2,9 @@
   "name": "pi-yyp-config",
   "version": "1.3.0",
   "description": "yyp's personal pi config: extensions, skills, prompts, themes",
+  "scripts": {
+    "test": "node --experimental-strip-types tests/pi-sync-settle-smoke.mjs && node --experimental-strip-types tests/pi-sync-packages-integration.mjs"
+  },
   "keywords": ["pi-package"],
   "license": "MIT",
   "pi": {
