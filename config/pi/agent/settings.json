@@ -3,8 +3,10 @@
   "hideThinkingBlock": false,
   "packages": [
     "git:github.com/SomeTestZero/pi-agents-md-tracker",
+    "git:github.com/SomeTestZero/pi-ask-user-question",
     "git:git@github.com:SomeTestZero/pi-comm-relay.git",
     "git:git@github.com:SomeTestZero/pi-infcode-bridge.git",
+    "git:git@github.com:SomeTestZero/pi-lite-recap.git",
     "git:git@github.com:SomeTestZero/pi-token-speed.git",
     "git:github.com/SomeTestZero/pi-volcengine-plans",
     "git:git@github.com:SomeTestZero/pi-yyp-config.git",
@@ -14,6 +16,26 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "volcengine-agentplan",
-  "defaultModel": "glm-5.3-flash"
+  "defaultProvider": "xiaomi-token-plan-cn",
+  "defaultModel": "mimo-v2.6-pro",
+  "compaction": {
+    "reserveTokens": 32768,
+    "modelOverrides": {
+      "volcengine-agentplan/glm-5.3": {
+        "reserveTokens": 65536
+      },
+      "volcengine-agentplan/glm-5.3-flash": {
+        "reserveTokens": 65536
+      },
+      "volcengine-plan/glm-5.3": {
+        "reserveTokens": 65536
+      },
+      "volcengine-plan/glm-5.3-flash": {
+        "reserveTokens": 65536
+      },
+      "neu-llm-gateway/moma_glm-5.3": {
+        "reserveTokens": 65536
+      }
+    }
+  }
 }
