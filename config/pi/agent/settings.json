@@ -16,8 +16,8 @@
   ],
   "theme": "dark",
   "tuiMode": "fullscreen",
-  "defaultProvider": "xiaomi-token-plan-cn",
-  "defaultModel": "mimo-v2.6-pro",
+  "defaultProvider": "infcode",
+  "defaultModel": "kimi-k3",
   "compaction": {
     "reserveTokens": 32768,
     "modelOverrides": {
