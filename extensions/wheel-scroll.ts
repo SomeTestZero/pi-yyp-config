@@ -22,10 +22,18 @@ export default function (pi: ExtensionAPI) {
   const apply = () => {
     // `currentTui` is a stable reference that always points at the live
     // renderer, so re-applying on every render also survives runtime TUI
-    // mode switches (`/settings`). Regular mode has no such property,
-    // hence the guard.
-    if (currentTui && "wheelScrollLines" in currentTui) {
-      currentTui.wheelScrollLines = Math.max(1, Math.floor(lines));
+    // mode switches (`/settings`). Regular mode has no wheel setter at all,
+    // hence the guards. pi 0.99.x exposes `setWheelScrollLines(n)` (the
+    // pre-0.99 `wheelScrollLines` field is gone — the old `in` check silently
+    // no-op'd, which is why this extension appeared dead).
+    if (!currentTui) return;
+    const n = Math.max(1, Math.floor(lines));
+    if (typeof currentTui.setWheelScrollLines === "function") {
+      currentTui.setWheelScrollLines(n);
+      return;
+    }
+    if ("wheelScrollLines" in currentTui) {
+      currentTui.wheelScrollLines = n;
     }
   };
 
