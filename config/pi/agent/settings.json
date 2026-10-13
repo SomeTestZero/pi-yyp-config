@@ -37,5 +37,8 @@
         "reserveTokens": 65536
       }
     }
+  },
+  "reaAssist": {
+    "autoEnable": false
   }
 }
