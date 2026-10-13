@@ -2,13 +2,13 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-10T02:12:07.125Z"
+      "lastSeen": "2026-10-13T09:20:44.720Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-13T09:44:30.828Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-10-09T12:43:44.076Z"
+      "lastSeen": "2026-10-13T02:37:29.199Z"
     },
     "C20251212115562": {
       "lastSeen": "2026-09-15T05:10:27.134Z"
@@ -16,12 +16,12 @@
   },
   "settings": {
     "defaultProvider": {
-      "ts": 1791598117899,
-      "machine": "NEU-20230908KJS"
+      "ts": 1791701081742,
+      "machine": "yyp-home-pc"
     },
     "defaultModel": {
-      "ts": 1791598117899,
-      "machine": "NEU-20230908KJS"
+      "ts": 1791701081742,
+      "machine": "yyp-home-pc"
     },
     "compaction": {
       "ts": 1790094878957,
