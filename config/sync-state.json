@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-13T12:15:41.298Z"
+      "lastSeen": "2026-10-13T12:44:12.276Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-13T10:02:55.090Z"
@@ -63,6 +63,10 @@
     },
     "git:github.com/sometestzero/pi-ask-user-question": {
       "ts": 1791556630191,
+      "machine": "yyp-home-pc"
+    },
+    "npm:pi-subagent-feather": {
+      "ts": 1791895452271,
       "machine": "yyp-home-pc"
     }
   },
@@ -147,7 +151,8 @@
         "git:github.com/sometestzero/pi-yyp-config": 1791613523703,
         "npm:@narumitw/pi-btw": 1791613523703,
         "npm:pi-goal-x": 1791613523703,
-        "npm:pi-web-access": 1791613523703
+        "npm:pi-web-access": 1791613523703,
+        "npm:pi-subagent-feather": 1791895452271
       }
     },
     "settings": {
