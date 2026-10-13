@@ -42,6 +42,7 @@ pi          # 启动后执行：
 | 全局设置 | `~/.pi/agent/settings.json` ↔ `config/pi/agent/settings.json` | pi-sync 扩展（顶层键级三方合并） |
 | 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装 |
 | 键位绑定 | `keybindings.json` | pi-sync 扩展 |
+| web-search 配置（默认 workflow、自动开浏览器等） | `web-search.json` ↔ `config/pi/web-search.json` | pi-sync 扩展（整文件三方合并；本机路径自动对齐 pi-web-access 实际读取处，如 `~/.pi/agent/web-search.json`） |
 | 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播（任一台机器删了插件/文件/配置键，其他机器下次同步时同样删除）。

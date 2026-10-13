@@ -4,6 +4,7 @@
  * 用一个私有 git 仓库作为唯一同步源，在多台山电脑之间同步：
  *   - settings.json（顶层键级三方合并，packages 并集，排除键不同步）
  *   - keybindings.json（整文件三方合并）
+ *   - web-search.json（整文件三方合并；本机路径与 pi-web-access 实际读取处保持一致）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）
  * 删除通过墓碑（tombstone）传播；冲突在交互模式弹窗选择，自动模式跳过并挂起。
  *
@@ -17,7 +18,7 @@
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
  *               "enabled": true, "autoSync": true,
- *               "excludeKeys": [], "includeFiles": [] } }
+ *               "excludeKeys": [] } }
  *
  * 测试钩子：PI_SYNC_HOME 覆盖 ~/.pi，PI_SYNC_WORK 覆盖同步克隆目录。
  */
@@ -73,6 +74,26 @@ function liveSettingsPath(): string {
 function liveKeybindingsPath(): string {
   return path.join(agentDir(), "keybindings.json");
 }
+/**
+ * web-search.json 的本机路径。必须与 pi-web-access（web_search 扩展）的解析规则一致，
+ * 否则同步过来的配置扩展根本读不到（曾因此失效：扩展已迁到 ~/.pi/agent/，
+ * 而这里还在写旧路径 ~/.pi/）。
+ * 解析顺序：PI_CODING_AGENT_DIR > $XDG_CONFIG_HOME/pi（若存在旧版 ~/.pi/web-search.json
+ * 则优先旧版）> ~/.pi/agent。
+ */
+function webSearchLivePath(): string {
+  const explicit = process.env.PI_CODING_AGENT_DIR;
+  if (explicit) return path.join(explicit, "web-search.json");
+  const xdg = process.env.XDG_CONFIG_HOME;
+  if (xdg) {
+    const xdgFile = path.join(xdg, "pi", "web-search.json");
+    if (fs.existsSync(xdgFile)) return xdgFile;
+    const legacy = path.join(piHome(), "web-search.json");
+    if (fs.existsSync(legacy)) return legacy;
+    return xdgFile;
+  }
+  return path.join(agentDir(), "web-search.json");
+}
 function liveExtDir(): string {
   return path.join(agentDir(), "extensions");
 }
@@ -120,7 +141,6 @@ export interface SyncConfig {
   repo?: string;
   machineId: string;
   excludeKeys: string[];
-  includeFiles: string[];
   branch?: string;
 }
 
@@ -410,7 +430,6 @@ export function loadConfig(): SyncConfig {
     repo: typeof s?.repo === "string" ? s.repo : undefined,
     machineId: typeof s?.machineId === "string" && s.machineId ? s.machineId : os.hostname(),
     excludeKeys: Array.isArray(s?.excludeKeys) ? (s!.excludeKeys as string[]) : [],
-    includeFiles: Array.isArray(s?.includeFiles) ? (s!.includeFiles as string[]) : [],
     branch: typeof s?.branch === "string" ? s.branch : undefined,
   };
 }
@@ -577,9 +596,7 @@ function isIgnoredExtRel(rel: string): boolean {
 
 function liveAbsForRepoRel(rel: string, cfg: SyncConfig): string | null {
   if (rel === REPO_KEYBINDINGS) return liveKeybindingsPath();
-  if (rel === REPO_WEBSEARCH) {
-    return cfg.includeFiles.includes("web-search.json") ? path.join(piHome(), "web-search.json") : null;
-  }
+  if (rel === REPO_WEBSEARCH) return webSearchLivePath();
   if (rel.startsWith(REPO_EXT_DIR + "/")) {
     const sub = rel.slice(REPO_EXT_DIR.length + 1);
     if (isIgnoredExtRel(sub)) return null;
@@ -604,10 +621,8 @@ function walkFiles(dir: string, base = dir): string[] {
 function collectLiveFiles(cfg: SyncConfig): Map<string, string> {
   const m = new Map<string, string>();
   if (fs.existsSync(liveKeybindingsPath())) m.set(REPO_KEYBINDINGS, liveKeybindingsPath());
-  if (cfg.includeFiles.includes("web-search.json")) {
-    const ws = path.join(piHome(), "web-search.json");
-    if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
-  }
+  const ws = webSearchLivePath();
+  if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
   for (const rel of walkFiles(liveExtDir())) {
     if (isIgnoredExtRel(rel)) continue;
     m.set(`${REPO_EXT_DIR}/${rel}`, path.join(liveExtDir(), ...rel.split("/")));
@@ -620,10 +635,8 @@ function collectTreeFiles(cfg: SyncConfig): Map<string, string> {
   const root = workDir();
   const kb = path.join(root, REPO_KEYBINDINGS);
   if (fs.existsSync(kb)) m.set(REPO_KEYBINDINGS, kb);
-  if (cfg.includeFiles.includes("web-search.json")) {
-    const ws = path.join(root, REPO_WEBSEARCH);
-    if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
-  }
+  const ws = path.join(root, REPO_WEBSEARCH);
+  if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
   const extRoot = path.join(root, REPO_EXT_DIR);
   for (const rel of walkFiles(extRoot)) {
     if (isIgnoredExtRel(rel)) continue;
@@ -926,14 +939,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   // 文件（keybindings / web-search / extensions）
   const liveFiles = collectLiveFiles(cfg);
   const treeFiles = collectTreeFiles(cfg);
-  // web-search.json 未显式启用时停止跟踪（脚本时代遗留，可能含 API key）
-  if (!cfg.includeFiles.includes("web-search.json") && treeFiles.has(REPO_WEBSEARCH)) {
-    fs.unlinkSync(treeFiles.get(REPO_WEBSEARCH)!);
-    treeFiles.delete(REPO_WEBSEARCH);
-    delete state.files[REPO_WEBSEARCH];
-    changed = true;
-    notes.push(`-文件 ${REPO_WEBSEARCH}（停止跟踪）`);
-  }
+  // web-search.json 现已默认纳入同步（文件可能含 API key，仓库必须保持私有）
   for (const rel of new Set([...liveFiles.keys(), ...treeFiles.keys()])) {
     if (pending.has(`file:${rel}`)) continue;
     const lp = liveFiles.get(rel);
