@@ -617,11 +617,43 @@ async function commitIfDirty(message: string): Promise<boolean> {
  * 语义合并后创建真正的合并提交（把远端提交记为第二父提交）。
  * 即使内容无变化也必须建合并提交，否则双方历史永远分叉、push 永远 non-fast-forward。
  */
+/**
+ * 把 oursTree 的 prefix/ 子树覆盖到 baseTree 上（其余路径保持 baseTree 的内容）。
+ * 用于让「语义合并出来的 config/ 结果」压过 git 自动合并对 config/ 的处理。
+ */
+async function overlayTree(baseTree: string, oursTree: string, prefix: string): Promise<string> {
+  await git(["read-tree", baseTree]);
+  const rm = await git(["ls-tree", "-r", "--name-only", baseTree, "--", prefix]);
+  for (const p of rm.stdout.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    await git(["update-index", "--force-remove", "--", p]);
+  }
+  const add = await git(["ls-tree", "-r", oursTree, "--", prefix]);
+  for (const line of add.stdout.split("\n")) {
+    const m = line.match(/^(\d+) (\w+) ([0-9a-f]+)\t(.+)$/);
+    if (m) await git(["update-index", "--add", "--cacheinfo", `${m[1]},${m[3]},${m[4]}`]);
+  }
+  const t = await git(["write-tree"]);
+  return t.code === 0 && t.stdout.trim() ? t.stdout.trim() : baseTree;
+}
+
 async function commitMerge(otherParent: string, message: string): Promise<void> {
   await git(["add", "-A", "--", "config"]);
   const tree = await git(["write-tree"]);
   if (tree.code !== 0 || !tree.stdout.trim()) return;
-  const c = await git(["commit-tree", tree.stdout.trim(), "-p", "HEAD", "-p", otherParent, "-m", message]);
+  let finalTree = tree.stdout.trim();
+  // 语义合并结果只管理 config/；其余路径（extensions/、skills/、README.md 等由
+  // 包机制/手工提交维护的文件）必须走真实三方合并，否则 write-tree 只反映本机
+  // 工作克隆的旧索引，会把远端对这些文件的新增/修改静默抹掉
+  // （rea-assist.ts 与 skills/ 曾因此在 2c3e318 被整体吞掉）。
+  const mid = await git(["commit-tree", finalTree, "-p", "HEAD", "-m", "pi-sync: merge staging (temp)"]);
+  if (mid.code === 0 && mid.stdout.trim()) {
+    const mt = await git(["merge-tree", "--write-tree", mid.stdout.trim(), otherParent]);
+    const merged = mt.stdout.split("\n")[0]?.trim() ?? "";
+    if ((mt.code === 0 || mt.code === 1) && /^[0-9a-f]{40,64}$/.test(merged)) {
+      finalTree = await overlayTree(merged, finalTree, "config");
+    }
+  }
+  const c = await git(["commit-tree", finalTree, "-p", "HEAD", "-p", otherParent, "-m", message]);
   if (c.code !== 0 || !c.stdout.trim()) return;
   // 工作区内容本来就是我们写好的合并结果，reset 只是移动分支指针
   await git(["reset", "--hard", c.stdout.trim()]);
