@@ -12,6 +12,7 @@
     "git:git@github.com:SomeTestZero/pi-yyp-config.git",
     "npm:@narumitw/pi-btw",
     "npm:pi-goal-x",
+    "npm:pi-subagent-feather",
     "npm:pi-web-access"
   ],
   "theme": "dark",
@@ -37,5 +38,8 @@
         "reserveTokens": 65536
       }
     }
+  },
+  "reaAssist": {
+    "autoEnable": false
   }
 }

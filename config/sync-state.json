@@ -2,10 +2,10 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-12T01:40:35.434Z"
+      "lastSeen": "2026-10-14T02:16:52.075Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-10T02:19:58.720Z"
+      "lastSeen": "2026-10-14T01:49:11.652Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-14T02:26:16.738Z"
@@ -25,6 +25,10 @@
     },
     "compaction": {
       "ts": 1790094878957,
+      "machine": "yyp-home-pc"
+    },
+    "reaAssist": {
+      "ts": 1791886270769,
       "machine": "yyp-home-pc"
     }
   },
@@ -60,6 +64,10 @@
     "git:github.com/sometestzero/pi-ask-user-question": {
       "ts": 1791556630191,
       "machine": "yyp-home-pc"
+    },
+    "npm:pi-subagent-feather": {
+      "ts": 1791895452271,
+      "machine": "yyp-home-pc"
     }
   },
   "files": {
@@ -73,10 +81,6 @@
     },
     "config/pi/agent/extensions/relays.json": {
       "ts": 1790740665296,
-      "machine": "yyp-home-pc"
-    },
-    "config/pi/web-search.json": {
-      "ts": 1789641053687,
       "machine": "yyp-home-pc"
     }
   },
