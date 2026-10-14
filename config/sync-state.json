@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-13T09:20:44.720Z"
+      "lastSeen": "2026-10-13T12:44:12.276Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-14T01:49:11.652Z"
@@ -25,6 +25,10 @@
     },
     "compaction": {
       "ts": 1790094878957,
+      "machine": "yyp-home-pc"
+    },
+    "reaAssist": {
+      "ts": 1791886270769,
       "machine": "yyp-home-pc"
     }
   },
@@ -59,6 +63,10 @@
     },
     "git:github.com/sometestzero/pi-ask-user-question": {
       "ts": 1791556630191,
+      "machine": "yyp-home-pc"
+    },
+    "npm:pi-subagent-feather": {
+      "ts": 1791895452271,
       "machine": "yyp-home-pc"
     }
   },
@@ -144,6 +152,20 @@
         "npm:@narumitw/pi-btw": 1791942551608,
         "npm:pi-goal-x": 1791942551608,
         "npm:pi-web-access": 1791942551608
+      },
+      "yyp-home-pc": {
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1791613523703,
+        "git:github.com/sometestzero/pi-ask-user-question": 1791613523703,
+        "git:github.com/sometestzero/pi-comm-relay": 1791613523703,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1791613523703,
+        "git:github.com/sometestzero/pi-lite-recap": 1791613523703,
+        "git:github.com/sometestzero/pi-token-speed": 1791613523703,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1791613523703,
+        "git:github.com/sometestzero/pi-yyp-config": 1791613523703,
+        "npm:@narumitw/pi-btw": 1791613523703,
+        "npm:pi-goal-x": 1791613523703,
+        "npm:pi-web-access": 1791613523703,
+        "npm:pi-subagent-feather": 1791895452271
       }
     },
     "settings": {
@@ -156,6 +178,17 @@
         "defaultProvider": 1791942551608,
         "defaultModel": 1791942551608,
         "compaction": 1791942551608
+      },
+      "yyp-home-pc": {
+        "defaultThinkingLevel": 1791613523703,
+        "hideThinkingBlock": 1791613523703,
+        "packages": 1791613523703,
+        "theme": 1791613523703,
+        "tuiMode": 1791613523703,
+        "defaultProvider": 1791613523703,
+        "defaultModel": 1791613523703,
+        "compaction": 1791613523703,
+        "reaAssist": 1791886270769
       }
     },
     "files": {
@@ -164,6 +197,12 @@
         "config/pi/agent/extensions/neu-llm-gateway.ts": 1791942551608,
         "config/pi/agent/extensions/relays.auto.json": 1791942551608,
         "config/pi/agent/extensions/relays.json": 1791942551608
+      },
+      "yyp-home-pc": {
+        "config/pi/agent/keybindings.json": 1791613523703,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1791613523703,
+        "config/pi/agent/extensions/relays.auto.json": 1791613523703,
+        "config/pi/agent/extensions/relays.json": 1791613523703
       }
     }
   }
