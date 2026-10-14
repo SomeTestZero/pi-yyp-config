@@ -5,7 +5,7 @@
       "lastSeen": "2026-10-13T09:20:44.720Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-13T10:03:15.525Z"
+      "lastSeen": "2026-10-14T01:49:11.652Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-13T02:37:29.199Z"
@@ -129,5 +129,42 @@
       "ts": 1789550123895,
       "machine": "yyp-home-pc"
     }
-  ]
+  ],
+  "accepted": {
+    "packages": {
+      "NEU-20230908KJS": {
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1791942551608,
+        "git:github.com/sometestzero/pi-ask-user-question": 1791942551608,
+        "git:github.com/sometestzero/pi-comm-relay": 1791942551608,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1791942551608,
+        "git:github.com/sometestzero/pi-lite-recap": 1791942551608,
+        "git:github.com/sometestzero/pi-token-speed": 1791942551608,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1791942551608,
+        "git:github.com/sometestzero/pi-yyp-config": 1791942551608,
+        "npm:@narumitw/pi-btw": 1791942551608,
+        "npm:pi-goal-x": 1791942551608,
+        "npm:pi-web-access": 1791942551608
+      }
+    },
+    "settings": {
+      "NEU-20230908KJS": {
+        "defaultThinkingLevel": 1791942551608,
+        "hideThinkingBlock": 1791942551608,
+        "packages": 1791942551608,
+        "theme": 1791942551608,
+        "tuiMode": 1791942551608,
+        "defaultProvider": 1791942551608,
+        "defaultModel": 1791942551608,
+        "compaction": 1791942551608
+      }
+    },
+    "files": {
+      "NEU-20230908KJS": {
+        "config/pi/agent/keybindings.json": 1791942551608,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1791942551608,
+        "config/pi/agent/extensions/relays.auto.json": 1791942551608,
+        "config/pi/agent/extensions/relays.json": 1791942551608
+      }
+    }
+  }
 }
