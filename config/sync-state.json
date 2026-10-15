@@ -5,7 +5,7 @@
       "lastSeen": "2026-10-15T06:18:40.655Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-14T01:49:11.652Z"
+      "lastSeen": "2026-10-15T06:17:00.320Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-14T02:26:16.738Z"
@@ -15,14 +15,6 @@
     }
   },
   "settings": {
-    "defaultProvider": {
-      "ts": 1791701081742,
-      "machine": "yyp-home-pc"
-    },
-    "defaultModel": {
-      "ts": 1791701081742,
-      "machine": "yyp-home-pc"
-    },
     "compaction": {
       "ts": 1790094878957,
       "machine": "yyp-home-pc"
@@ -30,6 +22,10 @@
     "reaAssist": {
       "ts": 1791886270769,
       "machine": "yyp-home-pc"
+    },
+    "syncExcludeKeys": {
+      "ts": 1792043607106,
+      "machine": "NEU-20230908KJS"
     }
   },
   "packages": {
@@ -86,6 +82,14 @@
     "config/pi/web-search.json": {
       "ts": 1789641053687,
       "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/extensions/pi-sync-guard.ts": {
+      "ts": 1792043607106,
+      "machine": "NEU-20230908KJS"
+    },
+    "config/pi/agent/extensions/rea-assist.ts": {
+      "ts": 1792043621209,
+      "machine": "remote"
     }
   },
   "tombstones": [
