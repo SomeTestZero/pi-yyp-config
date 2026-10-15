@@ -5,7 +5,7 @@
       "lastSeen": "2026-10-15T01:58:58.825Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-15T05:53:27.226Z"
+      "lastSeen": "2026-10-15T06:17:00.320Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-14T02:26:16.738Z"
@@ -212,7 +212,8 @@
         "config/pi/agent/extensions/neu-llm-gateway.ts": 1791942551608,
         "config/pi/agent/extensions/relays.auto.json": 1791942551608,
         "config/pi/agent/extensions/relays.json": 1791942551608,
-        "config/pi/agent/extensions/pi-sync-guard.ts": 1792043607106
+        "config/pi/agent/extensions/pi-sync-guard.ts": 1792043607106,
+        "config/pi/agent/extensions/rea-assist.ts": 1792043630712
       },
       "yyp-home-pc": {
         "config/pi/agent/keybindings.json": 1791613523703,
