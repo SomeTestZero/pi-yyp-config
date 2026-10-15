@@ -41,5 +41,9 @@
   },
   "reaAssist": {
     "autoEnable": false
-  }
+  },
+  "syncExcludeKeys": [
+    "defaultProvider",
+    "defaultModel"
+  ]
 }

@@ -5,7 +5,7 @@
       "lastSeen": "2026-10-13T12:44:12.276Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-14T01:49:11.652Z"
+      "lastSeen": "2026-10-15T05:53:27.226Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-13T02:37:29.199Z"
@@ -30,6 +30,10 @@
     "reaAssist": {
       "ts": 1791886270769,
       "machine": "yyp-home-pc"
+    },
+    "syncExcludeKeys": {
+      "ts": 1792043607106,
+      "machine": "NEU-20230908KJS"
     }
   },
   "packages": {
@@ -86,6 +90,10 @@
     "config/pi/web-search.json": {
       "ts": 1789641053687,
       "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/extensions/pi-sync-guard.ts": {
+      "ts": 1792043607106,
+      "machine": "NEU-20230908KJS"
     }
   },
   "tombstones": [
@@ -151,7 +159,8 @@
         "git:github.com/sometestzero/pi-yyp-config": 1791942551608,
         "npm:@narumitw/pi-btw": 1791942551608,
         "npm:pi-goal-x": 1791942551608,
-        "npm:pi-web-access": 1791942551608
+        "npm:pi-web-access": 1791942551608,
+        "npm:pi-subagent-feather": 1791942580987
       },
       "yyp-home-pc": {
         "git:github.com/sometestzero/pi-agents-md-tracker": 1791613523703,
@@ -177,7 +186,9 @@
         "tuiMode": 1791942551608,
         "defaultProvider": 1791942551608,
         "defaultModel": 1791942551608,
-        "compaction": 1791942551608
+        "compaction": 1791942551608,
+        "reaAssist": 1791942580987,
+        "syncExcludeKeys": 1792043607106
       },
       "yyp-home-pc": {
         "defaultThinkingLevel": 1791613523703,
@@ -196,7 +207,8 @@
         "config/pi/agent/keybindings.json": 1791942551608,
         "config/pi/agent/extensions/neu-llm-gateway.ts": 1791942551608,
         "config/pi/agent/extensions/relays.auto.json": 1791942551608,
-        "config/pi/agent/extensions/relays.json": 1791942551608
+        "config/pi/agent/extensions/relays.json": 1791942551608,
+        "config/pi/agent/extensions/pi-sync-guard.ts": 1792043607106
       },
       "yyp-home-pc": {
         "config/pi/agent/keybindings.json": 1791613523703,
