@@ -2,16 +2,19 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-15T01:58:58.825Z"
+      "lastSeen": "2026-10-19T01:40:10.488Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-19T04:03:58.867Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-10-14T02:26:16.738Z"
+      "lastSeen": "2026-10-16T15:29:55.827Z"
     },
     "C20251212115562": {
       "lastSeen": "2026-09-15T05:10:27.134Z"
+    },
+    "yypmini": {
+      "lastSeen": "2026-10-19T02:26:30.323Z"
     }
   },
   "settings": {
@@ -167,18 +170,32 @@
         "npm:pi-subagent-feather": 1791942580987
       },
       "yyp-home-pc": {
-        "git:github.com/sometestzero/pi-agents-md-tracker": 1791613523703,
-        "git:github.com/sometestzero/pi-ask-user-question": 1791613523703,
-        "git:github.com/sometestzero/pi-comm-relay": 1791613523703,
-        "git:github.com/sometestzero/pi-infcode-bridge": 1791613523703,
-        "git:github.com/sometestzero/pi-lite-recap": 1791613523703,
-        "git:github.com/sometestzero/pi-token-speed": 1791613523703,
-        "git:github.com/sometestzero/pi-volcengine-plans": 1791613523703,
-        "git:github.com/sometestzero/pi-yyp-config": 1791613523703,
-        "npm:@narumitw/pi-btw": 1791613523703,
-        "npm:pi-goal-x": 1791613523703,
-        "npm:pi-web-access": 1791613523703,
-        "npm:pi-subagent-feather": 1791895452271
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1792047273181,
+        "git:github.com/sometestzero/pi-ask-user-question": 1792047273181,
+        "git:github.com/sometestzero/pi-comm-relay": 1792047273181,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1792047273181,
+        "git:github.com/sometestzero/pi-lite-recap": 1792047273181,
+        "git:github.com/sometestzero/pi-token-speed": 1792047273181,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1792047273181,
+        "git:github.com/sometestzero/pi-yyp-config": 1792047273181,
+        "npm:@narumitw/pi-btw": 1792047273181,
+        "npm:pi-goal-x": 1792047273181,
+        "npm:pi-web-access": 1792047273181,
+        "npm:pi-subagent-feather": 1792047273181
+      },
+      "yypmini": {
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1792376790317,
+        "git:github.com/sometestzero/pi-ask-user-question": 1792376790317,
+        "git:github.com/sometestzero/pi-comm-relay": 1792376790317,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1792376790317,
+        "git:github.com/sometestzero/pi-lite-recap": 1792376790317,
+        "git:github.com/sometestzero/pi-token-speed": 1792376790317,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1792376790317,
+        "git:github.com/sometestzero/pi-yyp-config": 1792376790317,
+        "npm:@narumitw/pi-btw": 1792376790317,
+        "npm:pi-goal-x": 1792376790317,
+        "npm:pi-subagent-feather": 1792376790317,
+        "npm:pi-web-access": 1792376790317
       }
     },
     "settings": {
@@ -195,15 +212,26 @@
         "syncExcludeKeys": 1792043607106
       },
       "yyp-home-pc": {
-        "defaultThinkingLevel": 1791613523703,
-        "hideThinkingBlock": 1791613523703,
-        "packages": 1791613523703,
-        "theme": 1791613523703,
-        "tuiMode": 1791613523703,
+        "defaultThinkingLevel": 1792047273181,
+        "hideThinkingBlock": 1792047273181,
+        "packages": 1792047273181,
+        "theme": 1792047273181,
+        "tuiMode": 1792047273181,
         "defaultProvider": 1791613523703,
         "defaultModel": 1791613523703,
-        "compaction": 1791613523703,
-        "reaAssist": 1791886270769
+        "compaction": 1792047273181,
+        "reaAssist": 1792047273181,
+        "syncExcludeKeys": 1792047273181
+      },
+      "yypmini": {
+        "defaultThinkingLevel": 1792376790317,
+        "hideThinkingBlock": 1792376790317,
+        "packages": 1792376790317,
+        "theme": 1792376790317,
+        "tuiMode": 1792376790317,
+        "compaction": 1792376790317,
+        "reaAssist": 1792376790317,
+        "syncExcludeKeys": 1792376790317
       }
     },
     "files": {
@@ -216,10 +244,22 @@
         "config/pi/agent/extensions/rea-assist.ts": 1792043630712
       },
       "yyp-home-pc": {
-        "config/pi/agent/keybindings.json": 1791613523703,
-        "config/pi/agent/extensions/neu-llm-gateway.ts": 1791613523703,
-        "config/pi/agent/extensions/relays.auto.json": 1791613523703,
-        "config/pi/agent/extensions/relays.json": 1791613523703
+        "config/pi/agent/keybindings.json": 1792047273181,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1792047273181,
+        "config/pi/agent/extensions/relays.auto.json": 1792047273181,
+        "config/pi/agent/extensions/relays.json": 1792047273181,
+        "config/pi/agent/extensions/pi-sync-guard.ts": 1792047273181,
+        "config/pi/agent/extensions/rea-assist.ts": 1792047273181,
+        "config/pi/agent/models.json": 1792322058869
+      },
+      "yypmini": {
+        "config/pi/agent/keybindings.json": 1792376790317,
+        "config/pi/agent/models.json": 1792376790317,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1792376790317,
+        "config/pi/agent/extensions/pi-sync-guard.ts": 1792376790317,
+        "config/pi/agent/extensions/rea-assist.ts": 1792376790317,
+        "config/pi/agent/extensions/relays.auto.json": 1792376790317,
+        "config/pi/agent/extensions/relays.json": 1792376790317
       }
     }
   }
