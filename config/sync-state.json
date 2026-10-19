@@ -5,13 +5,16 @@
       "lastSeen": "2026-10-19T16:04:28.506Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-15T06:17:00.320Z"
+      "lastSeen": "2026-10-19T04:03:58.867Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-10-16T15:29:55.827Z"
+      "lastSeen": "2026-10-19T12:44:53.460Z"
     },
     "C20251212115562": {
       "lastSeen": "2026-09-15T05:10:27.134Z"
+    },
+    "yypmini": {
+      "lastSeen": "2026-10-19T02:26:30.323Z"
     }
   },
   "settings": {
@@ -26,6 +29,14 @@
     "syncExcludeKeys": {
       "ts": 1792043607106,
       "machine": "NEU-20230908KJS"
+    },
+    "defaultProvider": {
+      "ts": 1791701081742,
+      "machine": "yyp-home-pc"
+    },
+    "defaultModel": {
+      "ts": 1791701081742,
+      "machine": "yyp-home-pc"
     }
   },
   "packages": {
