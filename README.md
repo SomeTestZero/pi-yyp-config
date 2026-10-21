@@ -68,6 +68,13 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
 
+## 请求体防爆（image-budget）
+
+10-21 起随仓库分发 `config/pi/agent/extensions/image-budget.ts`：在 `context` 事件里给**每轮请求的图片**设硬上限（历史窗口 4 张 + 24MB 预算，最近读的图优先保留），根治 DeepSeek 的 `413 Request Entity Too Large` / `550`。配套 `config/pi/agent/models.json` 把单图编码压到 `1600px / 1.5MB / q82`，一张 12MB 的 4096 PNG 读进会话只存 0.22MB。
+
+- 自查：`/imgbudget`；调试：`PI_IMAGE_BUDGET_DEBUG=1`；关闭：`PI_IMAGE_BUDGET_OFF=1`
+- 根因、实测边界（45.3MB 通 / 49.3MB 挂 / 官方 48 MiB）、DeepSeek 视觉侧限制（约 1300×1300 网格、1024 token/图）与验证记录 → **[docs/image-budget.md](docs/image-budget.md)**
+
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
 
