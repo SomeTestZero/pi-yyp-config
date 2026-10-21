@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-21T13:20:46.822Z"
+      "lastSeen": "2026-10-21T13:21:54.868Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-21T07:19:43.674Z"
@@ -103,7 +103,11 @@
       "machine": "remote"
     },
     "config/pi/agent/extensions/image-budget.ts": {
-      "ts": 1792588846817,
+      "ts": 1792588914863,
+      "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/models.json": {
+      "ts": 1792588914863,
       "machine": "yyp-home-pc"
     }
   },

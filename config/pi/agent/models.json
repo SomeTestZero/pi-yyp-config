@@ -1,0 +1,33 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "deepseek": {
+      "modelOverrides": {
+        "deepseek-flash": {
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 1600,
+                "maxHeight": 1600,
+                "maxBytes": 1572864,
+                "jpegQuality": 82
+              }
+            }
+          }
+        },
+        "deepseek-v4-pro": {
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 1600,
+                "maxHeight": 1600,
+                "maxBytes": 1572864,
+                "jpegQuality": 82
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

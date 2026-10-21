@@ -2,22 +2,25 @@
  * pi-image-budget —— 给每轮请求的图片体积设硬上限，根治 `413 Request Entity Too Large` / `550`（网关掐断）。
  *
  * 背景：读图会把编码后的 base64 永久存进会话历史，之后**每轮请求都整包重发**。
- * 图片字节和 token 完全解耦（35 张图才 ~50k token，却 65.7MB），所以 token 触发的
- * compaction 永远救不了：实测 api.deepseek.com 前置 openresty 上限约 64MB，
- * 61.7MB 还能通、65.7MB 立刻 550（30s 空响应），再重发就是 413。
+ * 图片字节和 token 完全解耦（30+ 张图才 ~50k token，却 50MB），所以 token 触发的
+ * compaction 永远救不了：实测 api.deepseek.com 前置 openresty，**45.3MB 还能通、
+ * 49.3MB 立刻 550**（30s 空响应，重试亦然），再重发就是 413 —— 上限约 48MiB。
  *
  * 做法：在 `context` 事件里（每轮 LLM 调用前、只影响本次请求、不改写磁盘历史）
  * 统计所有 image 块体积，超预算就**从最旧的开始**把 base64 换成一行占位文本，
  * 直到降到预算内。最近的图片永远优先保留，所以刚读的图不会被丢掉。
  *
- * 预算：默认 32MB，`PI_IMAGE_BUDGET_MB` 环境变量可覆盖（网关上限未知/更小的模型可调低）。
+ * 预算：默认 24MB（约 26MB 请求体，离 48MiB 上限留 2× 余量），`PI_IMAGE_BUDGET_MB`
+ * 环境变量可覆盖；`PI_IMAGE_BUDGET_DEBUG=1` 打印每轮图片体积到 stderr。
+ * 配套：`~/.pi/agent/models.json` 把单图压到 1600px / 1.5MB（编码时生效），
+ * 让 24MB 能装 16+ 张而不是 5 张。
  * 形状：`{ type:"image", data:<base64>, mimeType }`；同一张图被丢掉的占位文本固定，
  * 便于多轮之间命中 prompt cache（只有跨过阈值那一刻会有一次前缀失效）。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MB = 1024 * 1024;
-const DEFAULT_BUDGET_MB = 32;
+const DEFAULT_BUDGET_MB = 24;
 const PLACEHOLDER = "[历史图片已省略：本轮请求图片体积超上限]";
 
 type Block = { type?: string; data?: unknown; text?: string };
