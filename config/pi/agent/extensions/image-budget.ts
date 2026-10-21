@@ -85,11 +85,18 @@ export function trimImages(messages: Msg[], budgetBytes: number): TrimResult {
 export default function imageBudget(pi: ExtensionAPI) {
   const budgetMb = Number(process.env.PI_IMAGE_BUDGET_MB) || DEFAULT_BUDGET_MB;
   const budgetBytes = budgetMb * MB;
+  const debug = Boolean(process.env.PI_IMAGE_BUDGET_DEBUG);
   let lastDropped = -1;
 
   pi.on("context", async (event, ctx) => {
     const messages = event.messages as unknown as Msg[];
     const result = trimImages(messages, budgetBytes);
+    if (debug) {
+      process.stderr.write(
+        `[image-budget] images ${result.kept + result.dropped} · ${(result.totalBytes / MB).toFixed(1)}MB` +
+          ` → ${(result.keptBytes / MB).toFixed(1)}MB (drop ${result.dropped}, budget ${budgetMb}MB)\n`,
+      );
+    }
     if (!result.changed) {
       lastDropped = 0;
       return;
