@@ -11,24 +11,24 @@
  *      更早的全部换成一行占位文本；当前这一轮读的图全部保留（A/B 对比在同一轮内完成）。
  *   2. **体积预算**：窗口内仍然超预算（同一轮读了一堆大图）就从最旧开始继续丢，直到降到预算内。
  *
- * 为什么还要留几张历史图：跨轮对比（“这版和上一版比”）。掉掉也能用——占位文本会告诉模型，
- * 需要时重读源文件的裁切小图（库存图 1600px 后只有 ~0.2MB）。
+ * 为什么还要留几张历史图：跨轮对比（“这版和上一版比”）。丢掉也能用——占位文本会告诉模型，
+ * 需要时重读源文件的裁切小图（存量图 1600px 后只有 ~0.2MB）。
  *
  * 代价：每次丢弃会让被丢位置之后的 prompt cache 失效；窗口越小越省字节，但每轮新图都会跨过窗口边界。
  *
  * 预算：默认 24MB（约 26MB 请求体，离 48MiB 上限留 2× 余量），`PI_IMAGE_BUDGET_MB`
  * 环境变量可覆盖；`PI_IMAGE_HISTORY_IMAGES` 改历史窗口张数；`PI_IMAGE_BUDGET_DEBUG=1` 打字节数到 stderr。
  * 配套：`~/.pi/agent/models.json` 把单图压到 1600px / 1.5MB（编码时生效），
- * 让 24MB 能装 16+ 张而不是 5 张。
- * 形状：`{ type:"image", data:<base64>, mimeType }`；同一张图被丢掉的占位文本固定，
- * 便于多轮之间命中 prompt cache（只有跨过阈值那一刻会有一次前缀失效）。
+ * 让 24MB 预算内能装 16 张而不是 5 张。
+ * 形状：`{ type:"image", data:<base64>, mimeType }`；占位文本是固定字符串，
+ * 所以在丢图位置不变时后续请求仍能命中 prompt cache。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MB = 1024 * 1024;
 const DEFAULT_BUDGET_MB = 24;
 const HISTORY_KEEP = 4;
-const PLACEHOLDER = "[历史图片已省略：本轮请求图片体积超上限，需要时重新读取源文件的裁切小图]";
+const PLACEHOLDER = "[历史图片已省略：只保留最近几张，需要时重新读取源文件的裁切小图]";
 
 type Block = { type?: string; data?: unknown; text?: string };
 type Msg = { role?: string; content?: unknown };
