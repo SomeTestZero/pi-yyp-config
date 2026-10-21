@@ -6,12 +6,18 @@
  * compaction 永远救不了：实测 api.deepseek.com 前置 openresty，**45.3MB 还能通、
  * 49.3MB 立刻 550**（30s 空响应，重试亦然），再重发就是 413 —— 上限约 48MiB。
  *
- * 做法：在 `context` 事件里（每轮 LLM 调用前、只影响本次请求、不改写磁盘历史）
- * 统计所有 image 块体积，超预算就**从最旧的开始**把 base64 换成一行占位文本，
- * 直到降到预算内。最近的图片永远优先保留，所以刚读的图不会被丢掉。
+ * 做法（两道闸，都在 `context` 事件里、只影响本次请求、不改写磁盘历史）：
+ *   1. **历史窗口**：只保留「最后一轮 user 消息之前」最新 `historyKeep` 张图（默认 4，0 = 一张历史图都不发），
+ *      更早的全部换成一行占位文本；当前这一轮读的图全部保留（A/B 对比在同一轮内完成）。
+ *   2. **体积预算**：窗口内仍然超预算（同一轮读了一堆大图）就从最旧开始继续丢，直到降到预算内。
+ *
+ * 为什么还要留几张历史图：跨轮对比（“这版和上一版比”）。掉掉也能用——占位文本会告诉模型，
+ * 需要时重读源文件的裁切小图（库存图 1600px 后只有 ~0.2MB）。
+ *
+ * 代价：每次丢弃会让被丢位置之后的 prompt cache 失效；窗口越小越省字节，但每轮新图都会跨过窗口边界。
  *
  * 预算：默认 24MB（约 26MB 请求体，离 48MiB 上限留 2× 余量），`PI_IMAGE_BUDGET_MB`
- * 环境变量可覆盖；`PI_IMAGE_BUDGET_DEBUG=1` 打印每轮图片体积到 stderr。
+ * 环境变量可覆盖；`PI_IMAGE_HISTORY_IMAGES` 改历史窗口张数；`PI_IMAGE_BUDGET_DEBUG=1` 打字节数到 stderr。
  * 配套：`~/.pi/agent/models.json` 把单图压到 1600px / 1.5MB（编码时生效），
  * 让 24MB 能装 16+ 张而不是 5 张。
  * 形状：`{ type:"image", data:<base64>, mimeType }`；同一张图被丢掉的占位文本固定，
@@ -21,6 +27,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MB = 1024 * 1024;
 const DEFAULT_BUDGET_MB = 24;
+const HISTORY_KEEP = 4;
 const PLACEHOLDER = "[历史图片已省略：本轮请求图片体积超上限，需要时重新读取源文件的裁切小图]";
 
 type Block = { type?: string; data?: unknown; text?: string };
@@ -35,12 +42,16 @@ export interface TrimResult {
   totalBytes: number;
   keptBytes: number;
   dropped: number;
+  droppedByWindow: number;
   kept: number;
   changed: boolean;
 }
 
-/** 纯函数：超预算时从最旧的图片开始替换为占位文本。输入不被修改。 */
-export function trimImages(messages: Msg[], budgetBytes: number): TrimResult {
+/**
+ * 纯函数：先按「历史窗口」只留最新 historyKeep 张旧图，再按体积预算从最旧继续丢。
+ * 当前轮（最后一条 user 消息之后）的图默认全保留，只有超预算才丢。输入不被修改。
+ */
+export function trimImages(messages: Msg[], budgetBytes: number, historyKeep = 4): TrimResult {
   const spots: { mi: number; bi: number; bytes: number }[] = [];
   let totalBytes = 0;
   messages.forEach((m, mi) => {
@@ -55,19 +66,39 @@ export function trimImages(messages: Msg[], budgetBytes: number): TrimResult {
     });
   });
 
-  if (totalBytes <= budgetBytes) {
-    return { messages, totalBytes, keptBytes: totalBytes, dropped: 0, kept: spots.length, changed: false };
+  if (spots.length === 0) {
+    return { messages, totalBytes: 0, keptBytes: 0, dropped: 0, droppedByWindow: 0, kept: 0, changed: false };
   }
 
-  // 从最旧往后丢，丢到进预算为止；万一单张就超预算，继续丢直到全都不剩。
-  const dropAt = new Set<string>();
-  let keptBytes = totalBytes;
-  let dropped = 0;
-  for (const s of spots) {
+  let lastUserIdx = -1;
+  messages.forEach((m, mi) => {
+    if (m.role === "user") lastUserIdx = mi;
+  });
+  const turnStart = lastUserIdx < 0 ? 0 : lastUserIdx;
+
+  // 1) 历史窗口：当前轮之前的图只留最新 historyKeep 张
+  const key = (s: { mi: number; bi: number }) => `${s.mi}:${s.bi}`;
+  const historySpots = spots.filter((s) => s.mi < turnStart);
+  const keep = new Set<string>(spots.filter((s) => s.mi >= turnStart).map(key));
+  for (const s of historySpots.slice(Math.max(0, historySpots.length - Math.max(0, historyKeep)))) {
+    keep.add(key(s));
+  }
+
+  const keptSpots = spots.filter((s) => keep.has(key(s)));
+  let keptBytes = keptSpots.reduce((sum, s) => sum + s.bytes, 0);
+  const droppedByWindow = spots.length - keptSpots.length;
+
+  // 2) 体积预算：从窗内最旧的开始继续丢，直到进预算
+  let droppedBudget = 0;
+  for (const s of keptSpots) {
     if (keptBytes <= budgetBytes) break;
-    dropAt.add(`${s.mi}:${s.bi}`);
+    keep.delete(key(s));
     keptBytes -= s.bytes;
-    dropped += 1;
+    droppedBudget += 1;
+  }
+
+  if (droppedByWindow === 0 && droppedBudget === 0) {
+    return { messages, totalBytes, keptBytes, dropped: 0, droppedByWindow: 0, kept: spots.length, changed: false };
   }
 
   const messagesOut = messages.map((m, mi) => {
@@ -75,19 +106,29 @@ export function trimImages(messages: Msg[], budgetBytes: number): TrimResult {
     if (!Array.isArray(content)) return m;
     let touched = false;
     const next = content.map((block, bi) => {
-      if (!dropAt.has(`${mi}:${bi}`) || imageBytes(block as Block) === 0) return block;
+      if (keep.has(`${mi}:${bi}`) || imageBytes(block as Block) === 0) return block;
       touched = true;
       return { type: "text", text: PLACEHOLDER };
     });
     return touched ? { ...m, content: next } : m;
   });
 
-  return { messages: messagesOut, totalBytes, keptBytes, dropped, kept: spots.length - dropped, changed: true };
+  const dropped = droppedByWindow + droppedBudget;
+  return {
+    messages: messagesOut,
+    totalBytes,
+    keptBytes,
+    dropped,
+    droppedByWindow,
+    kept: spots.length - dropped,
+    changed: true,
+  };
 }
 
 export default function imageBudget(pi: ExtensionAPI) {
   const budgetMb = Number(process.env.PI_IMAGE_BUDGET_MB) || DEFAULT_BUDGET_MB;
   const budgetBytes = budgetMb * MB;
+  const historyKeep = Number(process.env.PI_IMAGE_HISTORY_IMAGES ?? HISTORY_KEEP);
   const debug = Boolean(process.env.PI_IMAGE_BUDGET_DEBUG);
   let lastDropped = -1;
   let lastResult: TrimResult | null = null;
@@ -96,25 +137,29 @@ export default function imageBudget(pi: ExtensionAPI) {
     description: "查看本轮请求的图片体积 / 预算使用情况",
     handler: async (_args, ctx) => {
       if (!lastResult) {
-        ctx.ui.notify(`图片预算 ${budgetMb}MB（本会话还没有发过请求）`, "info");
+        ctx.ui.notify(`图片：历史窗口 ${historyKeep} 张 · 预算 ${budgetMb}MB（本会话还没发过请求）`, "info");
         return;
       }
+      const r = lastResult;
       ctx.ui.notify(
-        `图片 ${lastResult.kept + lastResult.dropped} 张 · ${(lastResult.totalBytes / MB).toFixed(1)}MB` +
-          ` → 本轮送 ${(lastResult.keptBytes / MB).toFixed(1)}MB（丢 ${lastResult.dropped} 张）· 预算 ${budgetMb}MB`,
-        lastResult.changed ? "warning" : "info",
+        `图片 ${r.kept + r.dropped} 张 · ${(r.totalBytes / MB).toFixed(1)}MB → 本轮送 ` +
+          `${(r.keptBytes / MB).toFixed(1)}MB（历史窗口丢 ${r.droppedByWindow} 张 · 超预算再丢 ` +
+          `${r.dropped - r.droppedByWindow} 张）· 窗口 ${historyKeep} 张 / 预算 ${budgetMb}MB`,
+        r.changed ? "warning" : "info",
       );
     },
   });
 
   pi.on("context", async (event, ctx) => {
     const messages = event.messages as unknown as Msg[];
-    const result = trimImages(messages, budgetBytes);
+    const result = trimImages(messages, budgetBytes, historyKeep);
     lastResult = result;
     if (debug) {
       process.stderr.write(
         `[image-budget] images ${result.kept + result.dropped} · ${(result.totalBytes / MB).toFixed(1)}MB` +
-          ` → ${(result.keptBytes / MB).toFixed(1)}MB (drop ${result.dropped}, budget ${budgetMb}MB)\n`,
+          ` → keep ${result.kept} (${(result.keptBytes / MB).toFixed(1)}MB)` +
+          ` · window -${result.droppedByWindow} · budget -${result.dropped - result.droppedByWindow}` +
+          ` · window ${historyKeep} / budget ${budgetMb}MB\n`,
       );
     }
     if (!result.changed) {
@@ -124,8 +169,9 @@ export default function imageBudget(pi: ExtensionAPI) {
     if (result.dropped !== lastDropped) {
       lastDropped = result.dropped;
       ctx.ui.notify(
-        `图片超预算：丢 ${result.dropped} 张历史图（${(result.totalBytes / MB).toFixed(1)}MB → ` +
-          `${(result.keptBytes / MB).toFixed(1)}MB / 上限 ${budgetMb}MB），最近 ${result.kept} 张保留`,
+        `历史图片只发最近 ${historyKeep} 张：丢 ${result.droppedByWindow} 张旧图` +
+          (result.dropped > result.droppedByWindow ? `，超预算再丢 ${result.dropped - result.droppedByWindow} 张` : "") +
+          `（${(result.totalBytes / MB).toFixed(1)}MB → ${(result.keptBytes / MB).toFixed(1)}MB，预算 ${budgetMb}MB）`,
         "warning",
       );
     }
