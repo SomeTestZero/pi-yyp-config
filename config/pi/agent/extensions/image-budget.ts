@@ -17,7 +17,8 @@
  * 代价：每次丢弃会让被丢位置之后的 prompt cache 失效；窗口越小越省字节，但每轮新图都会跨过窗口边界。
  *
  * 预算：默认 24MB（约 26MB 请求体，离 48MiB 上限留 2× 余量），`PI_IMAGE_BUDGET_MB`
- * 环境变量可覆盖；`PI_IMAGE_HISTORY_IMAGES` 改历史窗口张数；`PI_IMAGE_BUDGET_DEBUG=1` 打字节数到 stderr。
+ * 环境变量可覆盖；`PI_IMAGE_HISTORY_IMAGES` 改历史窗口张数；`PI_IMAGE_BUDGET_DEBUG=1` 打字节数到 stderr；
+ * `PI_IMAGE_BUDGET_OFF=1` 彻底关掉（排查/回滚用，图片就整包发了）。
  * 配套：`~/.pi/agent/models.json` 把单图压到 1600px / 1.5MB（编码时生效），
  * 让 24MB 预算内能装 16 张而不是 5 张。
  * 形状：`{ type:"image", data:<base64>, mimeType }`；占位文本是固定字符串，
@@ -129,6 +130,7 @@ export default function imageBudget(pi: ExtensionAPI) {
   const budgetMb = Number(process.env.PI_IMAGE_BUDGET_MB) || DEFAULT_BUDGET_MB;
   const budgetBytes = budgetMb * MB;
   const historyKeep = Number(process.env.PI_IMAGE_HISTORY_IMAGES ?? HISTORY_KEEP);
+  const off = /^(1|true|yes|on)$/i.test(process.env.PI_IMAGE_BUDGET_OFF ?? "");
   const debug = Boolean(process.env.PI_IMAGE_BUDGET_DEBUG);
   let lastDropped = -1;
   let lastResult: TrimResult | null = null;
@@ -151,6 +153,7 @@ export default function imageBudget(pi: ExtensionAPI) {
   });
 
   pi.on("context", async (event, ctx) => {
+    if (off) return;
     const messages = event.messages as unknown as Msg[];
     const result = trimImages(messages, budgetBytes, historyKeep);
     lastResult = result;
