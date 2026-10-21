@@ -21,7 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MB = 1024 * 1024;
 const DEFAULT_BUDGET_MB = 24;
-const PLACEHOLDER = "[历史图片已省略：本轮请求图片体积超上限]";
+const PLACEHOLDER = "[历史图片已省略：本轮请求图片体积超上限，需要时重新读取源文件的裁切小图]";
 
 type Block = { type?: string; data?: unknown; text?: string };
 type Msg = { role?: string; content?: unknown };
@@ -90,10 +90,27 @@ export default function imageBudget(pi: ExtensionAPI) {
   const budgetBytes = budgetMb * MB;
   const debug = Boolean(process.env.PI_IMAGE_BUDGET_DEBUG);
   let lastDropped = -1;
+  let lastResult: TrimResult | null = null;
+
+  pi.registerCommand("imgbudget", {
+    description: "查看本轮请求的图片体积 / 预算使用情况",
+    handler: async (_args, ctx) => {
+      if (!lastResult) {
+        ctx.ui.notify(`图片预算 ${budgetMb}MB（本会话还没有发过请求）`, "info");
+        return;
+      }
+      ctx.ui.notify(
+        `图片 ${lastResult.kept + lastResult.dropped} 张 · ${(lastResult.totalBytes / MB).toFixed(1)}MB` +
+          ` → 本轮送 ${(lastResult.keptBytes / MB).toFixed(1)}MB（丢 ${lastResult.dropped} 张）· 预算 ${budgetMb}MB`,
+        lastResult.changed ? "warning" : "info",
+      );
+    },
+  });
 
   pi.on("context", async (event, ctx) => {
     const messages = event.messages as unknown as Msg[];
     const result = trimImages(messages, budgetBytes);
+    lastResult = result;
     if (debug) {
       process.stderr.write(
         `[image-budget] images ${result.kept + result.dropped} · ${(result.totalBytes / MB).toFixed(1)}MB` +
