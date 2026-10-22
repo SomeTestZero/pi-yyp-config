@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-21T13:33:03.140Z"
+      "lastSeen": "2026-10-22T08:07:00.130Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-10-21T07:19:43.674Z"
@@ -15,6 +15,9 @@
     },
     "yypmini": {
       "lastSeen": "2026-10-19T02:26:30.323Z"
+    },
+    "gxyusproecs9KHS2dK4tz": {
+      "lastSeen": "2026-10-22T10:03:08.580Z"
     }
   },
   "settings": {
