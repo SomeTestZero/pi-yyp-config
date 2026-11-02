@@ -75,6 +75,16 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 - 自查：`/imgbudget`；调试：`PI_IMAGE_BUDGET_DEBUG=1`；关闭：`PI_IMAGE_BUDGET_OFF=1`
 - 根因、实测边界（45.3MB 通 / 49.3MB 挂 / 官方 48 MiB）、DeepSeek 视觉侧限制（约 1300×1300 网格、1024 token/图）与验证记录 → **[docs/image-budget.md](docs/image-budget.md)**
 
+## WorkBuddy 模型（`/login workbuddy`）
+
+`extensions/workbuddy.ts` 把 WorkBuddy 订阅接成 pi 原生 provider，不需要 WorkBuddy 桌面端、不再跑本地反代：
+
+- `/login workbuddy` → 浏览器完成 WorkBuddy 官方插件 OAuth 授权。每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
+- 模型目录直接读上游 `/v2/enterprises/personal/models`：上下文窗口、最大输出、思考档位都以它为准；模型名后的 `(0.69x)` 是积分倍率。
+- `/thinking` 控制 `reasoning_effort`（按模型支持的档位映射）；本次会话已用积分显示在 footer（`WorkBuddy 1.23 cr`）。
+- `/wb` 查看模型列表与本次积分；`/wb refresh` 强制刷新模型目录。
+- 非官方客户端，属灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品），账号风险自担；合规路径是 Coding Plan / Token Plan 的 API Key。
+
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
 
