@@ -89,6 +89,8 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 
 `extensions/model-tree.ts` 把扁平模型列表改成两级树：先选 provider（带模型数和当前 provider 标记），再选该 provider 的模型（带上下文 / 输出上限 / thinking / image 能力），选完即切换。内置 `/model` 保持不变，`/model provider/id` 仍可直接跳。
 
+列表按终端高度开窗（↑↓ / PgUp / PgDn / 滚轮都在窗口内跟随，选中项不会被甩出屏幕），直接打字即模糊筛选，Esc 先清筛选再退出。`●` = 当前会话模型，`◆` = settings.json 里的默认模型；`Ctrl+S` 切换并写默认（等价于内置 `/model` 里的 Save as default），只改 `defaultProvider`/`defaultModel` 两个键。
+
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
 
