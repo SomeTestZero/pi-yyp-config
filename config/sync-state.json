@@ -5,7 +5,7 @@
       "lastSeen": "2026-11-03T01:38:51.259Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-21T07:19:43.674Z"
+      "lastSeen": "2026-11-02T07:10:04.785Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-24T09:52:56.470Z"
@@ -108,6 +108,10 @@
     "config/pi/agent/extensions/image-budget.ts": {
       "ts": 1792589583135,
       "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/models.json": {
+      "ts": 1793603404642,
+      "machine": "NEU-20230908KJS"
     }
   },
   "tombstones": [
@@ -157,12 +161,6 @@
       "type": "package",
       "id": "npm:pi-subagents",
       "ts": 1789550123895,
-      "machine": "yyp-home-pc"
-    },
-    {
-      "type": "file",
-      "id": "config/pi/agent/models.json",
-      "ts": 1793599613499,
       "machine": "yyp-home-pc"
     }
   ],
@@ -288,7 +286,8 @@
         "config/pi/agent/extensions/relays.auto.json": 1791942551608,
         "config/pi/agent/extensions/relays.json": 1791942551608,
         "config/pi/agent/extensions/pi-sync-guard.ts": 1792043607106,
-        "config/pi/agent/extensions/rea-assist.ts": 1792043630712
+        "config/pi/agent/extensions/rea-assist.ts": 1792043630712,
+        "config/pi/agent/models.json": 1793603404642
       },
       "yypmini": {
         "config/pi/agent/keybindings.json": 1792376790317,
