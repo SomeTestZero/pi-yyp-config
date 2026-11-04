@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-04T01:42:42.435Z"
+      "lastSeen": "2026-11-04T09:47:51.360Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-04T01:34:19.617Z"
@@ -39,6 +39,10 @@
     },
     "defaultModel": {
       "ts": 1791701081742,
+      "machine": "yyp-home-pc"
+    },
+    "extensionChangelogVersions": {
+      "ts": 1793785671351,
       "machine": "yyp-home-pc"
     }
   },
@@ -240,7 +244,8 @@
         "reaAssist": 1792047273181,
         "syncExcludeKeys": 1792047273181,
         "defaultProvider": 1791613523703,
-        "defaultModel": 1791613523703
+        "defaultModel": 1791613523703,
+        "extensionChangelogVersions": 1793785671351
       },
       "NEU-20230908KJS": {
         "defaultThinkingLevel": 1791942551608,
