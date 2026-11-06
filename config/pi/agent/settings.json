@@ -43,5 +43,9 @@
   "syncExcludeKeys": [
     "defaultProvider",
     "defaultModel"
-  ]
+  ],
+  "extensionChangelogVersions": {
+    "{\"source\":\"git:github.com/SomeTestZero/pi-ask-user-question\",\"scope\":\"user\"}": "2.12.1",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.46.0"
+  }
 }

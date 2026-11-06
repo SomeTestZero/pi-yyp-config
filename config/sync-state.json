@@ -2,19 +2,22 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-10-19T01:40:10.488Z"
+      "lastSeen": "2026-11-05T12:18:11.234Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-10-15T06:17:00.320Z"
+      "lastSeen": "2026-11-04T01:34:19.617Z"
     },
     "VM-0-13-ubuntu": {
-      "lastSeen": "2026-10-16T15:29:55.827Z"
+      "lastSeen": "2026-10-24T09:52:56.470Z"
     },
     "C20251212115562": {
       "lastSeen": "2026-09-15T05:10:27.134Z"
     },
     "yypmini": {
       "lastSeen": "2026-11-06T01:38:44.311Z"
+    },
+    "gxyusproecs9KHS2dK4tz": {
+      "lastSeen": "2026-10-23T04:21:59.256Z"
     }
   },
   "settings": {
@@ -29,6 +32,18 @@
     "syncExcludeKeys": {
       "ts": 1792043607106,
       "machine": "NEU-20230908KJS"
+    },
+    "defaultProvider": {
+      "ts": 1791701081742,
+      "machine": "yyp-home-pc"
+    },
+    "defaultModel": {
+      "ts": 1791701081742,
+      "machine": "yyp-home-pc"
+    },
+    "extensionChangelogVersions": {
+      "ts": 1793785671351,
+      "machine": "yyp-home-pc"
     }
   },
   "packages": {
@@ -93,6 +108,14 @@
     "config/pi/agent/extensions/rea-assist.ts": {
       "ts": 1792043621209,
       "machine": "remote"
+    },
+    "config/pi/agent/extensions/image-budget.ts": {
+      "ts": 1792589583135,
+      "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/models.json": {
+      "ts": 1793603404642,
+      "machine": "NEU-20230908KJS"
     }
   },
   "tombstones": [
@@ -174,6 +197,34 @@
         "npm:pi-goal-x": 1792376790317,
         "npm:pi-subagent-feather": 1792376790317,
         "npm:pi-web-access": 1792376790317
+      },
+      "NEU-20230908KJS": {
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1791942551608,
+        "git:github.com/sometestzero/pi-ask-user-question": 1791942551608,
+        "git:github.com/sometestzero/pi-comm-relay": 1791942551608,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1791942551608,
+        "git:github.com/sometestzero/pi-lite-recap": 1791942551608,
+        "git:github.com/sometestzero/pi-token-speed": 1791942551608,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1791942551608,
+        "git:github.com/sometestzero/pi-yyp-config": 1791942551608,
+        "npm:@narumitw/pi-btw": 1791942551608,
+        "npm:pi-goal-x": 1791942551608,
+        "npm:pi-web-access": 1791942551608,
+        "npm:pi-subagent-feather": 1791942580987
+      },
+      "gxyusproecs9KHS2dK4tz": {
+        "git:github.com/sometestzero/pi-agents-md-tracker": 1792660569907,
+        "git:github.com/sometestzero/pi-ask-user-question": 1792660569907,
+        "git:github.com/sometestzero/pi-comm-relay": 1792660569907,
+        "git:github.com/sometestzero/pi-infcode-bridge": 1792660569907,
+        "git:github.com/sometestzero/pi-lite-recap": 1792660569907,
+        "git:github.com/sometestzero/pi-token-speed": 1792660569907,
+        "git:github.com/sometestzero/pi-volcengine-plans": 1792660569907,
+        "git:github.com/sometestzero/pi-yyp-config": 1792660569907,
+        "npm:@narumitw/pi-btw": 1792660569907,
+        "npm:pi-goal-x": 1792660569907,
+        "npm:pi-subagent-feather": 1792660569907,
+        "npm:pi-web-access": 1792660569907
       }
     },
     "settings": {
@@ -185,7 +236,10 @@
         "tuiMode": 1792047273181,
         "compaction": 1792047273181,
         "reaAssist": 1792047273181,
-        "syncExcludeKeys": 1792047273181
+        "syncExcludeKeys": 1792047273181,
+        "defaultProvider": 1791613523703,
+        "defaultModel": 1791613523703,
+        "extensionChangelogVersions": 1793785671351
       },
       "yypmini": {
         "defaultThinkingLevel": 1792376790317,
@@ -196,6 +250,28 @@
         "compaction": 1792376790317,
         "reaAssist": 1792376790317,
         "syncExcludeKeys": 1792376790317
+      },
+      "NEU-20230908KJS": {
+        "defaultThinkingLevel": 1791942551608,
+        "hideThinkingBlock": 1791942551608,
+        "packages": 1791942551608,
+        "theme": 1791942551608,
+        "tuiMode": 1791942551608,
+        "defaultProvider": 1791942551608,
+        "defaultModel": 1791942551608,
+        "compaction": 1791942551608,
+        "reaAssist": 1791942580987,
+        "syncExcludeKeys": 1792043607106
+      },
+      "gxyusproecs9KHS2dK4tz": {
+        "defaultThinkingLevel": 1792660569907,
+        "hideThinkingBlock": 1792660569907,
+        "packages": 1792660569907,
+        "theme": 1792660569907,
+        "tuiMode": 1792660569907,
+        "compaction": 1792660569907,
+        "reaAssist": 1792660569907,
+        "syncExcludeKeys": 1792660569907
       }
     },
     "files": {
@@ -206,7 +282,8 @@
         "config/pi/agent/extensions/rea-assist.ts": 1792047273181,
         "config/pi/agent/extensions/relays.auto.json": 1792047273181,
         "config/pi/agent/extensions/relays.json": 1792047273181,
-        "config/pi/agent/models.json": 1792322058869
+        "config/pi/agent/models.json": 1792322058869,
+        "config/pi/agent/extensions/image-budget.ts": 1792588807139
       },
       "yypmini": {
         "config/pi/agent/keybindings.json": 1792376790317,
@@ -216,6 +293,25 @@
         "config/pi/agent/extensions/rea-assist.ts": 1792376790317,
         "config/pi/agent/extensions/relays.auto.json": 1792376790317,
         "config/pi/agent/extensions/relays.json": 1792376790317
+      },
+      "NEU-20230908KJS": {
+        "config/pi/agent/keybindings.json": 1791942551608,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1791942551608,
+        "config/pi/agent/extensions/relays.auto.json": 1791942551608,
+        "config/pi/agent/extensions/relays.json": 1791942551608,
+        "config/pi/agent/extensions/pi-sync-guard.ts": 1792043607106,
+        "config/pi/agent/extensions/rea-assist.ts": 1792043630712,
+        "config/pi/agent/models.json": 1793603404642,
+        "config/pi/agent/extensions/image-budget.ts": 1793603424897
+      },
+      "gxyusproecs9KHS2dK4tz": {
+        "config/pi/agent/keybindings.json": 1792660569907,
+        "config/pi/agent/extensions/image-budget.ts": 1792660569907,
+        "config/pi/agent/extensions/neu-llm-gateway.ts": 1792660569907,
+        "config/pi/agent/extensions/pi-sync-guard.ts": 1792660569907,
+        "config/pi/agent/extensions/rea-assist.ts": 1792660569907,
+        "config/pi/agent/extensions/relays.auto.json": 1792660569907,
+        "config/pi/agent/extensions/relays.json": 1792660569907
       }
     }
   }
