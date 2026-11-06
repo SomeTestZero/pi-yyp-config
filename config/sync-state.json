@@ -14,7 +14,7 @@
       "lastSeen": "2026-09-15T05:10:27.134Z"
     },
     "yypmini": {
-      "lastSeen": "2026-11-06T01:38:44.311Z"
+      "lastSeen": "2026-11-06T01:47:46.416Z"
     },
     "gxyusproecs9KHS2dK4tz": {
       "lastSeen": "2026-10-23T04:21:59.256Z"
@@ -249,7 +249,8 @@
         "tuiMode": 1792376790317,
         "compaction": 1792376790317,
         "reaAssist": 1792376790317,
-        "syncExcludeKeys": 1792376790317
+        "syncExcludeKeys": 1792376790317,
+        "extensionChangelogVersions": 1793929129939
       },
       "NEU-20230908KJS": {
         "defaultThinkingLevel": 1791942551608,
@@ -292,7 +293,8 @@
         "config/pi/agent/extensions/pi-sync-guard.ts": 1792376790317,
         "config/pi/agent/extensions/rea-assist.ts": 1792376790317,
         "config/pi/agent/extensions/relays.auto.json": 1792376790317,
-        "config/pi/agent/extensions/relays.json": 1792376790317
+        "config/pi/agent/extensions/relays.json": 1792376790317,
+        "config/pi/agent/extensions/image-budget.ts": 1793929129940
       },
       "NEU-20230908KJS": {
         "config/pi/agent/keybindings.json": 1791942551608,
