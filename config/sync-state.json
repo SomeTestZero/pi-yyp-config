@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-09T09:29:58.077Z"
+      "lastSeen": "2026-11-09T12:55:53.016Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-04T01:34:19.617Z"
@@ -42,7 +42,7 @@
       "machine": "yyp-home-pc"
     },
     "extensionChangelogVersions": {
-      "ts": 1793785671351,
+      "ts": 1794228953001,
       "machine": "yyp-home-pc"
     }
   },
