@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-03T10:03:50.832Z"
+      "lastSeen": "2026-11-10T03:38:09.766Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-10T03:42:33.110Z"
@@ -14,7 +14,7 @@
       "lastSeen": "2026-09-15T05:10:27.134Z"
     },
     "yypmini": {
-      "lastSeen": "2026-10-19T02:26:30.323Z"
+      "lastSeen": "2026-11-06T01:47:46.416Z"
     },
     "gxyusproecs9KHS2dK4tz": {
       "lastSeen": "2026-10-23T04:21:59.256Z"
@@ -40,6 +40,10 @@
     "syncExcludeKeys": {
       "ts": 1792043607106,
       "machine": "NEU-20230908KJS"
+    },
+    "extensionChangelogVersions": {
+      "ts": 1794228953001,
+      "machine": "yyp-home-pc"
     }
   },
   "packages": {
@@ -252,7 +256,8 @@
         "defaultModel": 1791613523703,
         "compaction": 1792047273181,
         "reaAssist": 1792047273181,
-        "syncExcludeKeys": 1792047273181
+        "syncExcludeKeys": 1792047273181,
+        "extensionChangelogVersions": 1793785671351
       },
       "yypmini": {
         "defaultThinkingLevel": 1792376790317,
@@ -262,7 +267,8 @@
         "tuiMode": 1792376790317,
         "compaction": 1792376790317,
         "reaAssist": 1792376790317,
-        "syncExcludeKeys": 1792376790317
+        "syncExcludeKeys": 1792376790317,
+        "extensionChangelogVersions": 1793929129939
       },
       "gxyusproecs9KHS2dK4tz": {
         "defaultThinkingLevel": 1792660569907,
@@ -303,7 +309,8 @@
         "config/pi/agent/extensions/pi-sync-guard.ts": 1792376790317,
         "config/pi/agent/extensions/rea-assist.ts": 1792376790317,
         "config/pi/agent/extensions/relays.auto.json": 1792376790317,
-        "config/pi/agent/extensions/relays.json": 1792376790317
+        "config/pi/agent/extensions/relays.json": 1792376790317,
+        "config/pi/agent/extensions/image-budget.ts": 1793929129940
       },
       "gxyusproecs9KHS2dK4tz": {
         "config/pi/agent/keybindings.json": 1792660569907,
