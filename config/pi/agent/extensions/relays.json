@@ -35,7 +35,12 @@
       // thinkingLevelMap：字符串=映射后发给上游，null=该档上游不认（pi 里不显示）。
       "models": {
         // ── GPT-5.5 / 5.6 / 6 代：1.05M 上下文、128K 输出 ──
-        // 上游档位：none(关思考) / low / medium / high / xhigh / max；minimal 直接 400
+        // 上游档位：none(关思考) / low / medium / high / xhigh / max；minimal 直接 400。
+        //
+        // ⚠️ 本站 OpenAI 路由对 GPT 系**基本无视 reasoning_effort**：参数照收不报错，
+        //    但同一道难题在 none→max 六档下完成量差异 <15%（噪声级），reasoning 只回
+        //    30 字符左右的占位符。映射照写是为了换站点时能直接用；在本站别指望有档位差异。
+        //    实测有档位响应的：Gemini（OpenAI 路由）、Claude（Anthropic 路由）。
         "gpt-6-astra":   { "name": "GPT-6 Astra",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
                            "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "gpt-5.6-sol":   { "name": "GPT-5.6 Sol",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
@@ -50,10 +55,32 @@
 
         // ── Claude：1M 上下文、128K 输出、adaptive thinking（用 effort 控档）──
         // 实测输出块带真实 signature，所以不需要 allowEmptySignature。
-        // off = 发 thinking:{type:"disabled"}（fable 系列是 adaptive always-on，关不掉，故 off:null）
-        "claude-opus-5":   { "name": "Claude Opus 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+        // off = 发 thinking:{type:"disabled"}
+        //
+        // ⚠️ 5 代全部必须 forceAdaptiveThinking：上游收下旧式
+        //    thinking:{type:"enabled",budget_tokens:N} 时**不报错但完全不思考**
+        //    （实测 thinking_tokens=0、无 thinking 块）。不写这个字段 = 静默废掉思考。
+        //    只有 claude-haiku-5-5 例外，两种格式都认；统一走 adaptive 便于用 effort 控档。
+        //
+        // ⚠️ off 档判定规则：发 thinking:{type:"disabled"} 实测 400 的才写 off:null。
+        //    实测拒绝 disabled（400）：claude-opus-5、claude-sonnet-5、claude-sonnet-5-5
+        //    实测接受 disabled（200）：claude-opus-4-6/4-7/4-8、claude-opus-5-5、claude-haiku-5-5
+        "claude-opus-5-5": { "name": "Claude Opus 5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
                              "compat": { "forceAdaptiveThinking": true },
                              "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-sonnet-5-5": { "name": "Claude Sonnet 5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                               "compat": { "forceAdaptiveThinking": true },
+                               "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // haiku 的 1M/128K 是按 5 代同门规格外推的（未逐项实测）；宁可估大，
+        // 真溢出时由本插件的 OVERFLOW_PATTERN 钩子触发自动压缩重试兜底。
+        "claude-haiku-5-5": { "name": "Claude Haiku 5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                              "compat": { "forceAdaptiveThinking": true },
+                              "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // claude-opus-4-6 故意不精调：4 代上游认旧式 budget_tokens（与 haiku 同类），
+        // guessMeta 给的 200K/32K 也符合 4 代真实规格。
+        "claude-opus-5":   { "name": "Claude Opus 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "claude-opus-4-8": { "name": "Claude Opus 4.8", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
                              "compat": { "forceAdaptiveThinking": true },
                              "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
@@ -62,7 +89,7 @@
                              "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "claude-sonnet-5": { "name": "Claude Sonnet 5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
                              "compat": { "forceAdaptiveThinking": true },
-                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+                             "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "claude-fable-5":   { "name": "Claude Fable 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
                               "compat": { "forceAdaptiveThinking": true },
                               "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
@@ -70,11 +97,16 @@
                               "compat": { "forceAdaptiveThinking": true },
                               "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
 
-        // ── Gemini：1M / 64K。关不掉思考，只能选强度（3.7 不收 minimal）──
+        // ── Gemini：1M / 64K。关不掉思考，只能选强度（3.7/3.8 不收 off、none、minimal）──
+        // 档位梯度实测成立：同一题 low/medium/high/max 的 reasoning_tokens 明显递增，
+        // 且 xhigh / max 网关都接受（不受 support 列表限制），故全给到 max。
         "gemini-3.7-flash": { "name": "Gemini 3.7 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
-                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high" } },
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gemini-3.8-flash": { "name": "Gemini 3.8 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // 3.6 已从云端清单消失，仅保留兜底条目，换站点/回滚时可用
         "gemini-3.6-flash": { "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
-                              "thinkingLevelMap": { "off": null, "minimal": "minimal", "low": "low", "medium": "medium", "high": "high" } },
+                              "thinkingLevelMap": { "off": null, "minimal": "minimal", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
 
         // ── Grok：500K 上下文，官方不设输出上限（这里给 128K 作为默认截断）──
         // 本站 OpenAI 路由会忽略 reasoning_effort（无报错），但保留官方档位映射，换站点也能用
@@ -89,8 +121,9 @@
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
         "gpt-5.5",
         "grok-4.6",
-        "gemini-3.7-flash", "gemini-3.6-flash",
-        "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5",
+        "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash",
+        "claude-opus-5", "claude-opus-5-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+        "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5",
         "claude-fable-5-1", "claude-fable-5"
       ]
     }
