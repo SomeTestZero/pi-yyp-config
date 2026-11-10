@@ -34,19 +34,41 @@
       // 同一模型在不同站点能接受的档位不同（例：本站 gpt-5.5 不收 minimal/max）。
       // thinkingLevelMap：字符串=映射后发给上游，null=该档上游不认（pi 里不显示）。
       "models": {
-        // ── GPT-5.5 / 5.6 / 6 代：1.05M 上下文、128K 输出 ──
+        // ── GPT 系：1.05M 上下文、128K 输出 ──
         // 上游档位：none(关思考) / low / medium / high / xhigh / max；minimal 直接 400。
         //
-        // ⚠️ 本站 OpenAI 路由对 GPT 系**基本无视 reasoning_effort**：参数照收不报错，
-        //    但同一道难题在 none→max 六档下完成量差异 <15%（噪声级），reasoning 只回
-        //    30 字符左右的占位符。映射照写是为了换站点时能直接用；在本站别指望有档位差异。
-        //    实测有档位响应的：Gemini（OpenAI 路由）、Claude（Anthropic 路由）。
+        // ✅ effort 实测**生效**，但有个坑：只在“题目真需要算”时才能看出梯度。
+        //    同一道组合题（直接召回型）六档都没量在 1000 上下，看不出差异；换一道
+        //    需要搜索计算的题（1e6 以上找孪生素数）后：
+        //      none  291 / 2035 reasoning_tokens
+        //      max  2159 / 2463 / 2474 reasoning_tokens
+        //    结论：别拿容易题去验证档位，会误判为“无效”。
+        //
+        // ⚠️ 两个反直觉点：
+        //  1) none ≠ 完全不思考。它只是“不额外加预算”，同题两次 291 vs 2035，
+        //     高的时候几乎追平 max。要真关思考，只有 Claude 走 Anthropic 路由
+        //     发 thinking:{type:"disabled"} 可靠（且 sonnet-5/opus-5 连这个都拒）。
+        //  2) reasoning_content 是**标题式摘要**，不是完整思考。实测 max 档 2474
+        //     reasoning_tokens 只回 95 字符（如 "**Checking candidate primality
+        //     manually****Checking remaining divisors**"）。别按可见字数估成本。
+        //
+        // 上下限依据：GPT-6 代 1.05M/128K；5.6 代按下推；gpt-5.5 是上代（无 max 档）。
         "gpt-6-astra":   { "name": "GPT-6 Astra",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // gpt-6-sol / gpt-6.1-sol / gpt-6.1-terra：云端当前清单里的在售型号，之前漏了眼。
+        // 同属 6 代，档位与 astra 一致；上下文/输出按 6 代规格。
+        "gpt-6-sol":     { "name": "GPT-6 Sol",     "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-6.1-sol":   { "name": "GPT-6.1 Sol",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-6.1-terra": { "name": "GPT-6.1 Terra", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
                            "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "gpt-5.6-sol":   { "name": "GPT-5.6 Sol",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
                            "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "gpt-5.6-terra": { "name": "GPT-5.6 Terra", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
                            "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // ↓ 以下两个已从云端清单**下架**（实测 503 "No available channel"）。
+        //   保留配置 = 下架期间不显示（云端清单一覆盖就没了），重新上架后立即可用。
         "gpt-5.6-luna":  { "name": "GPT-5.6 Luna",  "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
                            "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         // gpt-5.5 是上一代：没有 max 档
@@ -104,27 +126,33 @@
                               "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
         "gemini-3.8-flash": { "name": "Gemini 3.8 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
                               "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
-        // 3.6 已从云端清单消失，仅保留兜底条目，换站点/回滚时可用
+        // 3.6 已从云端清单消失，仅保留兜底条目，换站点/回滚时可用。
+        // 注意：它是唯一接受 minimal 的 Gemini（3.7/3.8 都拒），这点是当年设计意图，不改。
         "gemini-3.6-flash": { "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
                               "thinkingLevelMap": { "off": null, "minimal": "minimal", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
 
         // ── Grok：500K 上下文，官方不设输出上限（这里给 128K 作为默认截断）──
-        // 本站 OpenAI 路由会忽略 reasoning_effort（无报错），但保留官方档位映射，换站点也能用
+        // ⚠️ 已下架：云端 /v1/models 清单里已经没有 grok-4.6（实测 503 "No available channel"）。
+        // 保留配置只为重新上架时立即可用；下架期间云端清单覆盖后不会显示在 /model 里。
+        // 档位：当初在本站的实测记录是「OpenAI 路由忽略 reasoning_effort（无报错）」，
+        // 但该结论是在下架前测的、且未用“需计算”的题验证过，参考价值有限。
+        // 真要启用时请按上面的方法（难的题 + 看 reasoning_tokens）重新验证一遍。
         "grok-4.6": { "name": "Grok 4.6", "reasoning": true, "input": ["text", "image"], "contextWindow": 500000, "maxTokens": 131072,
                       "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh" } }
       },
 
       // 断网/未登录时的兜底清单（与云端 /v1/models 的对话模型保持一致，生图已排除）。
       // 云端同步成功时会用上游结果覆盖；这里只保证「拉不到时也是对的」。
+      // 末尾几个已下架（标 ✗），保留只为重新上架时兜底 —— 排后面，拉不到云端时它们也不会被优先看到。
       "fallbackModels": [
-        "gpt-6-astra",
-        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-        "gpt-5.5",
-        "grok-4.6",
-        "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash",
+        "gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra",
+        "gpt-5.6-sol", "gpt-5.6-terra",
+        "gemini-3.7-flash", "gemini-3.8-flash",
         "claude-opus-5", "claude-opus-5-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
         "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5",
-        "claude-fable-5-1", "claude-fable-5"
+        "claude-fable-5-1", "claude-fable-5",
+        // ✗ 已下架（云端清单里没有，实测不可用）
+        "gpt-5.6-luna", "gpt-5.5", "gemini-3.6-flash", "grok-4.6"
       ]
     }
 

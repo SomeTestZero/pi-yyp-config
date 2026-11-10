@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-10T08:24:21.008Z"
+      "lastSeen": "2026-11-10T09:51:10.522Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-10T03:42:33.110Z"
@@ -94,7 +94,7 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/extensions/relays.json": {
-      "ts": 1794299061002,
+      "ts": 1794304270513,
       "machine": "yyp-home-pc"
     },
     "config/pi/web-search.json": {
