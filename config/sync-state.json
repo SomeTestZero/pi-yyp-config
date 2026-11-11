@@ -5,7 +5,7 @@
       "lastSeen": "2026-11-11T08:03:02.278Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-11-10T03:42:33.110Z"
+      "lastSeen": "2026-11-11T07:22:40.188Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-24T09:52:56.470Z"
@@ -257,7 +257,8 @@
         "defaultModel": 1791942551608,
         "compaction": 1791942551608,
         "reaAssist": 1791942580987,
-        "syncExcludeKeys": 1792043607106
+        "syncExcludeKeys": 1792043607106,
+        "extensionChangelogVersions": 1794282172014
       },
       "yypmini": {
         "defaultThinkingLevel": 1792376790317,
