@@ -14,8 +14,10 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+	createAssistantMessageEventStream,
 	openAICompletionsApi,
 	type Api,
+	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type Model,
 	type OAuthCredentials,
@@ -67,11 +69,18 @@ interface WbModel {
 		supportedEfforts?: string[];
 		canDisableThinking?: boolean;
 	} | null;
+	/** 只支持思考模式（不能关思考）——这类模型必须每次都带 reasoning_effort。 */
+	onlyReasoning?: boolean;
 	credits?: string | null;
 }
 
-/** 离线/未登录时的兜底目录（2026-11 抓取）。登录后 refreshModels 用上游最新数据覆盖。 */
-const FALLBACK_MODELS: WbModel[] = [{"id":"auto","name":"Auto","maxInputTokens":256000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"credits":null},{"id":"hy3","name":"Hy3","maxInputTokens":192000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"credits":"x0.00 credits"},{"id":"hy3-x","name":"Hy3","maxInputTokens":192000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high"]},"supportsImages":true,"credits":"x0.05"},{"id":"hy4-preview","name":"Hy4 preview","maxInputTokens":960000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["high"]},"supportsImages":true,"credits":"x0.29"},{"id":"hy4-preview-x","name":"Hy4 preview","maxInputTokens":960000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["high"]},"supportsImages":true,"credits":"x0.29"},{"id":"default","name":"Default","maxInputTokens":200000,"maxOutputTokens":24000,"supportsReasoning":null,"reasoning":null,"supportsImages":false,"credits":"x2.20 credits"},{"id":"glm-5.3","name":"GLM-5.3","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"credits":"x0.69"},{"id":"glm-5.3-flash","name":"GLM-5.3-Flash","maxInputTokens":1000000,"maxOutputTokens":131072,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"credits":"x0.08"},{"id":"glm-5.2","name":"GLM-5.2","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"credits":"x0.79 credits"},{"id":"glm-5.0","name":"GLM-5.0","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":null,"supportsImages":false,"credits":"x0.80 credits"},{"id":"glm-4.7","name":"GLM-4.7","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":null,"supportsImages":false,"credits":"x0.23 credits"},{"id":"glm-4.6","name":"GLM-4.6","maxInputTokens":168000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":null,"supportsImages":false,"credits":"x0.23 credits"},{"id":"glm-4.6v","name":"GLM-4.6V","maxInputTokens":128000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"credits":"x0.11 credits"},{"id":"minimax-m2.5","name":"MiniMax-M2.5","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"credits":"x0.18 credits"},{"id":"kimi-k3-1","name":"Kimi-K3","maxInputTokens":1000000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"credits":"x1.62 credits"},{"id":"kimi-k2.8-preview","name":"Kimi-K2.8-Preview","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":true,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"credits":"x0.77 credits"},{"id":"kimi-k2.5","name":"Kimi-K2.5","maxInputTokens":164000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"credits":"x0.45 credits"},{"id":"kimi-k2-thinking","name":"Kimi-K2-Thinking","maxInputTokens":164000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"credits":"x0.54 credits"},{"id":"deepseek-v4-flash","name":"Deepseek-V4-Flash","maxInputTokens":1000000,"maxOutputTokens":50000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"credits":"x0.17 credits"},{"id":"deepseek-v4.1-flash","name":"DeepSeek-V4.1-Flash","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"canDisableThinking":true,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"credits":"x0.11 credits"},{"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"credits":"x0.51 credits"},{"id":"deepseek-v3-2-volc","name":"DeepSeek-V3.2","maxInputTokens":96000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"credits":"x0.29 credits"},{"id":"hunyuan-2.0-thinking","name":"Hunyuan-2.0-Thinking","maxInputTokens":128000,"maxOutputTokens":24000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"credits":"x0.04 credits"},{"id":"hunyuan-chat","name":"Hunyuan-Turbos","maxInputTokens":200000,"maxOutputTokens":8192,"supportsReasoning":null,"reasoning":null,"supportsImages":false,"credits":null},{"id":"space-bunny","name":"Space-Bunny","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"max","summary":"auto","supportedEfforts":["low","medium","high","xhigh","max"]},"supportsImages":true,"credits":"x0.08 credits"},{"id":"step-5-preview","name":"Step-5-Preview","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","medium","high"]},"supportsImages":true,"credits":"x0.33 credits"},{"id":"mimo-v2.6-pro","name":"Xiaomi MiMo-V2.6-Pro","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"credits":"x0.13 credits"},{"id":"minimax-m3.1-flash","name":"MiniMax-M3.1-Flash","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"max","summary":"auto","supportedEfforts":["low","medium","high","xhigh","max"]},"supportsImages":true,"credits":"x0.08 credits"},{"id":"kimi-k3.1-pro","name":"Kimi-K3.1-Pro","maxInputTokens":1000000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"credits":"x0.97 credits"}];
+/**
+ * 离线/未登录时的兜底目录（2026-11-11 抓取）。登录后 refreshModels 用上游最新数据覆盖。
+ * 重新生成：node scripts/wb-models-snapshot.mjs（只保留有 maxInputTokens 的聊天模型）。
+ */
+const FALLBACK_MODELS: WbModel[] = [{"id":"auto","name":"Auto","maxInputTokens":256000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":null},{"id":"hy4free","name":"Hy4","maxInputTokens":960000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["high"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.00 credits"},{"id":"hy4std","name":"Hy4","maxInputTokens":960000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["high"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.29 credits"},{"id":"fast-model","name":"快速","maxInputTokens":300000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.15"},{"id":"balanced-model","name":"均衡","maxInputTokens":300000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.50"},{"id":"deep-model","name":"极致","maxInputTokens":300000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x1.00"},{"id":"hy3","name":"Hy3","maxInputTokens":192000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.00 credits"},{"id":"hy3-x","name":"Hy3","maxInputTokens":192000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.05"},{"id":"hy4-preview-x","name":"Hy4 preview","maxInputTokens":960000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["high"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.29"},{"id":"default","name":"Default","maxInputTokens":200000,"maxOutputTokens":24000,"supportsReasoning":null,"reasoning":null,"supportsImages":false,"onlyReasoning":null,"credits":"x2.20 credits"},{"id":"glm-5.3","name":"GLM-5.3","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.69"},{"id":"glm-5.3-flash","name":"GLM-5.3-Flash","maxInputTokens":1000000,"maxOutputTokens":131072,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.08"},{"id":"glm-5.2","name":"GLM-5.2","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.79 credits"},{"id":"glm-5.0","name":"GLM-5.0","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":null,"supportsImages":false,"onlyReasoning":null,"credits":"x0.80 credits"},{"id":"glm-4.7","name":"GLM-4.7","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":null,"supportsImages":false,"onlyReasoning":null,"credits":"x0.23 credits"},{"id":"glm-4.6","name":"GLM-4.6","maxInputTokens":168000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":null,"supportsImages":false,"onlyReasoning":null,"credits":"x0.23 credits"},{"id":"glm-4.6v","name":"GLM-4.6V","maxInputTokens":128000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":null,"credits":"x0.11 credits"},{"id":"minimax-m2.5","name":"MiniMax-M2.5","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"onlyReasoning":true,"credits":"x0.18 credits"},{"id":"kimi-k3-1","name":"Kimi-K3","maxInputTokens":1000000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x1.62 credits"},{"id":"kimi-k2.8-preview","name":"Kimi-K2.8-Preview","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":true,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.77 credits"},{"id":"kimi-k2.5","name":"Kimi-K2.5","maxInputTokens":164000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.45 credits"},{"id":"kimi-k2-thinking","name":"Kimi-K2-Thinking","maxInputTokens":164000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"onlyReasoning":true,"credits":"x0.54 credits"},{"id":"deepseek-v4-flash","name":"Deepseek-V4-Flash","maxInputTokens":1000000,"maxOutputTokens":50000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.17 credits"},{"id":"deepseek-v4.1-flash","name":"DeepSeek-V4.1-Flash","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"canDisableThinking":true,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.11 credits"},{"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.51 credits"},{"id":"deepseek-v3-2-volc","name":"DeepSeek-V3.2","maxInputTokens":96000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"onlyReasoning":true,"credits":"x0.29 credits"},{"id":"hunyuan-2.0-thinking","name":"Hunyuan-2.0-Thinking","maxInputTokens":128000,"maxOutputTokens":24000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"onlyReasoning":true,"credits":"x0.04 credits"},{"id":"hunyuan-chat","name":"Hunyuan-Turbos","maxInputTokens":200000,"maxOutputTokens":8192,"supportsReasoning":null,"reasoning":null,"supportsImages":false,"onlyReasoning":null,"credits":null},{"id":"space-bunny","name":"Space-Bunny","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"max","summary":"auto","supportedEfforts":["low","medium","high","xhigh","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.08 credits"},{"id":"step-5-preview","name":"Step-5-Preview","maxInputTokens":1000000,"maxOutputTokens":64000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","medium","high"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.33 credits"},{"id":"mimo-v2.6-pro","name":"Xiaomi MiMo-V2.6-Pro","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.13 credits"},{"id":"minimax-m3.1-flash","name":"MiniMax-M3.1-Flash","maxInputTokens":1000000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"max","summary":"auto","supportedEfforts":["low","medium","high","xhigh","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.08 credits"},{"id":"kimi-k3.1-pro","name":"Kimi-K3.1-Pro","maxInputTokens":1000000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.97 credits"},{"id":"minimax-m2.7","name":"MiniMax-M2.7","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.26 credits"},{"id":"minimax-m3-pay","name":"MiniMax-M3","maxInputTokens":512000,"maxOutputTokens":128000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x0.25 credits"},{"id":"glm-5.3-flashx","name":"GLM-5.3-FlashX","maxInputTokens":1000000,"maxOutputTokens":131072,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x0.19 credits"},{"id":"glm-5.0-turbo","name":"GLM-5.0-Turbo","maxInputTokens":200000,"maxOutputTokens":48000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":false,"onlyReasoning":true,"credits":"x0.95 credits"},{"id":"kimi-k3-2","name":"Kimi-K3","maxInputTokens":1000000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"effort":"medium","summary":"auto"},"supportsImages":true,"onlyReasoning":true,"credits":"x1.62"},{"id":"kimi-k3.1-pro-highspeed","name":"Kimi-K3.1-Pro-Highspeed","maxInputTokens":1000000,"maxOutputTokens":32000,"supportsReasoning":true,"reasoning":{"canDisableThinking":false,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]},"supportsImages":true,"onlyReasoning":true,"credits":"x1.56 credits"}];
+
+
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -120,6 +129,304 @@ function chatHeaders(token: string): Record<string, string> {
 		"x-private-data": "true",
 		"x-codebuddy-request": "1",
 	};
+}
+
+/**
+ * 排队（6020 / 6021 / 6022）。
+ *
+ * 上游把「拥堵」和「排队」拆成两条链路：聊天请求先回 429 + 业务码把你挡进队列，
+ * 客户端再拿这个 requestId 轮询 /v2/chat/queue/status，放行后重新发一次请求。
+ * pi 的通用重试不懂这套（3 次 × 2/4/8s），第二次重发还会撞 6022——队列里那个
+ * requestId 还占着位——所以最后总是「Retry failed after 3 attempts」。
+ * 这里在 provider 内部补上这条链路：按 retry_after 等、轮询队列、放行后重发，
+ * 等待进度写进状态栏；用户中断时顺手把队位退掉（6022 的根就是没退队）。
+ */
+const QUEUE_CODES = new Set([6020, 6021, 6022]);
+/** queue/status 里表示「还没轮到」的取值；其余（expired / cancelled / ready…）都当放行。 */
+const QUEUE_WAITING_STATES = new Set(["waiting", "queued", "pending", "in_queue", "queueing"]);
+
+function envMs(name: string, fallback: number, allowZero = false): number {
+	const value = Number(process.env[name]);
+	if (!Number.isFinite(value)) return fallback;
+	if (value > 0) return Math.floor(value);
+	return allowZero && value === 0 ? 0 : fallback;
+}
+
+const QUEUE_POLL_MS = envMs("PI_WB_QUEUE_POLL_MS", 5000);
+/** 排队总预算；0 = 不等待，撞到排队直接报一句人话（想快速换模型时用）。 */
+const QUEUE_MAX_WAIT_MS = envMs("PI_WB_QUEUE_MAX_WAIT_MS", 15 * 60 * 1000, true);
+/** 没有队列信息的裸 429：等这么久再发一次（对方没给 retry_after 时的保守值）。 */
+const QUEUE_BARE_RETRY_MS = envMs("PI_WB_QUEUE_BARE_RETRY_MS", 20_000);
+
+export interface QueueInfo {
+	code: number;
+	requestId?: string;
+	position?: number;
+	size?: number;
+	retryAfterMs?: number;
+	estimatedWaitMs?: number;
+	userType?: string;
+}
+
+function fieldNumber(text: string, key: string): number | undefined {
+	const match = new RegExp(`"${key}"\\s*:\\s*(-?\\d+)`).exec(text);
+	return match ? Number(match[1]) : undefined;
+}
+
+function fieldString(text: string, key: string): string | undefined {
+	const match = new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`).exec(text);
+	return match ? match[1] : undefined;
+}
+
+/**
+ * 从「429: {…}」这种报错文本里认出排队，抽出席位信息；不是排队返回 null。
+ * 报错体可能被上游截断，所以 JSON 解析失败时退回正则抽关键字段。
+ */
+export function parseQueueInfo(text: string): QueueInfo | null {
+	const raw = String(text ?? "");
+	let code = fieldNumber(raw, "code");
+	let requestId = fieldString(raw, "requestId");
+	let data: Record<string, unknown> = {};
+	const start = raw.indexOf("{");
+	const end = raw.lastIndexOf("}");
+	if (start >= 0 && end > start) {
+		try {
+			const parsed = JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+			if (typeof parsed.code === "number") code = parsed.code;
+			if (typeof parsed.requestId === "string") requestId = parsed.requestId;
+			if (parsed.data && typeof parsed.data === "object") data = parsed.data as Record<string, unknown>;
+		} catch {
+			// 截断/拼接过的报错体：正则抽字段就够做等待决策
+		}
+	}
+	if (code === undefined || !QUEUE_CODES.has(code)) return null;
+	const retryAfter = typeof data.retry_after === "number" ? data.retry_after : fieldNumber(raw, "retry_after");
+	const estimated = typeof data.estimated_wait === "number" ? data.estimated_wait : fieldNumber(raw, "estimated_wait");
+	const position = typeof data.queue_position === "number" ? data.queue_position : fieldNumber(raw, "queue_position");
+	const size = typeof data.queue_size === "number" ? data.queue_size : fieldNumber(raw, "queue_size");
+	const userType = typeof data.client_user_type === "string" ? data.client_user_type : fieldString(raw, "client_user_type");
+	return {
+		code,
+		requestId,
+		position,
+		size,
+		retryAfterMs: retryAfter === undefined ? undefined : retryAfter * 1000,
+		estimatedWaitMs: estimated === undefined ? undefined : estimated * 1000,
+		userType,
+	};
+}
+
+function looksThrottled(text: string): boolean {
+	return /\b429\b/.test(text) || /too many requests|rate.?limit|频率/i.test(text);
+}
+
+/** 队列状态。拿不到（网络/上游没这条）就返回 undefined，调用方按计时继续等。 */
+async function queueStatus(token: string, model: string, requestId: string, signal?: AbortSignal): Promise<string | undefined> {
+	try {
+		const res = await fetch(`${BASE}/v2/chat/queue/status`, {
+			method: "POST",
+			headers: { ...chatHeaders(token), "X-Conversation-Request-ID": requestId },
+			body: JSON.stringify({ model }),
+			signal: signal ?? AbortSignal.timeout(15_000),
+		});
+		if (!res.ok) return undefined;
+		const text = await res.text().catch(() => "");
+		const parsed = text ? (JSON.parse(text) as { data?: { status?: unknown } }) : {};
+		return typeof parsed.data?.status === "string" ? parsed.data.status : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** 退队。失败无害：下一次请求撞 6022 再等一轮就好。 */
+async function queueCancel(token: string, model: string, requestId: string): Promise<void> {
+	try {
+		await fetch(`${BASE}/v2/chat/queue/cancel`, {
+			method: "POST",
+			headers: { ...chatHeaders(token), "X-Conversation-Request-ID": requestId },
+			body: JSON.stringify({ model }),
+			signal: AbortSignal.timeout(5_000),
+		});
+	} catch {
+		// ignored
+	}
+}
+
+function queueSummary(model: string, info: QueueInfo): string {
+	const bits = [`${model} 排队中`];
+	if (info.position !== undefined) {
+		bits.push(info.size !== undefined ? `第 ${info.position}/${info.size} 位` : `第 ${info.position} 位`);
+	}
+	if (info.estimatedWaitMs !== undefined) bits.push(`约 ${Math.round(info.estimatedWaitMs / 1000)}s`);
+	return bits.join("，");
+}
+
+function queueText(model: string, info: QueueInfo, waitedMs: number, status: string | undefined): string {
+	const bits = [queueSummary(model, info)];
+	if (status) bits.push(status);
+	if (waitedMs >= 1000) bits.push(`已等 ${Math.round(waitedMs / 1000)}s`);
+	return bits.join(" · ");
+}
+
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal?.aborted) {
+			resolve();
+			return;
+		}
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal?.addEventListener("abort", finish, { once: true });
+	});
+}
+
+export interface QueueStreamOptions {
+	token: string;
+	model: string;
+	signal?: AbortSignal;
+	makeStream: () => AssistantMessageEventStream;
+	/** 流都没开成时（同步抛错）拿来当错误载体，免得 result() 拿到 undefined。 */
+	fallback: () => AssistantMessage;
+	onStatus?: (text: string | undefined) => void;
+	maxWaitMs?: number;
+	pollMs?: number;
+	now?: () => number;
+	wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	probe?: (token: string, model: string, requestId: string, signal?: AbortSignal) => Promise<string | undefined>;
+	cancel?: (token: string, model: string, requestId: string) => Promise<void>;
+}
+
+/**
+ * 把一次聊天包成「被挡就等、放行就重发」。
+ *
+ * 只在报错里认出排队/限流时接管；其它错误原样交给 pi 的重试层——那里有压缩、
+ * 上下文溢出、账号态它才懂的处理。重发时不能再补 start 事件：pi 会把 start
+ * 当成一条新消息塞进上下文，重发就会多出一条空的 assistant 消息。
+ */
+export function streamQueueAware(opts: QueueStreamOptions): AssistantMessageEventStream {
+	const out = createAssistantMessageEventStream();
+	const now = opts.now ?? Date.now;
+	const wait = opts.wait ?? sleepUnlessAborted;
+	const probe = opts.probe ?? queueStatus;
+	const cancel = opts.cancel ?? queueCancel;
+	const pollMs = opts.pollMs ?? QUEUE_POLL_MS;
+	const maxWaitMs = opts.maxWaitMs ?? QUEUE_MAX_WAIT_MS;
+
+	const finishError = (message: AssistantMessage, reason: "error" | "aborted", errorMessage?: string) => {
+		opts.onStatus?.(undefined);
+		out.push({
+			type: "error",
+			reason,
+			error: errorMessage === undefined ? message : { ...message, stopReason: reason === "aborted" ? "aborted" : "error", errorMessage },
+		});
+		out.end();
+	};
+
+	void (async () => {
+		const deadline = now() + maxWaitMs;
+		let startForwarded = false;
+		let partial: AssistantMessage | undefined;
+		let attempts = 0;
+
+		try {
+			for (;;) {
+				attempts++;
+				const inner = opts.makeStream();
+				let failed: AssistantMessage | undefined;
+
+				for await (const event of inner) {
+					if (event.type === "start") {
+						partial = event.partial;
+						if (startForwarded) continue;
+						startForwarded = true;
+						out.push(event);
+						continue;
+					}
+					if (event.type === "error") {
+						failed = event.error;
+						break;
+					}
+					out.push(event);
+					if (event.type === "done") {
+						opts.onStatus?.(undefined);
+						out.end();
+						return;
+					}
+				}
+
+				const message = failed?.errorMessage ?? "";
+				if (!failed) {
+					finishError(partial ?? opts.fallback(), "error", "WorkBuddy 返回了空响应");
+					return;
+				}
+				if (failed.stopReason === "aborted") {
+					finishError(failed, "aborted");
+					return;
+				}
+
+				const info = parseQueueInfo(message);
+				const queued: QueueInfo | null = info ?? (looksThrottled(message) ? { code: 429 } : null);
+				if (!queued) {
+					finishError(failed, "error");
+					return;
+				}
+				if (maxWaitMs <= 0) {
+					finishError(failed, "error", `${queueSummary(opts.model, queued)}；PI_WB_QUEUE_MAX_WAIT_MS=0 不等待，稍后重试或换个模型`);
+					return;
+				}
+
+				const attemptStart = now();
+				const targetMs = Math.min(
+					Math.max(queued.estimatedWaitMs ?? queued.retryAfterMs ?? QUEUE_BARE_RETRY_MS, pollMs),
+					Math.max(0, deadline - now()),
+				);
+				let status: string | undefined;
+
+				for (;;) {
+					if (opts.signal?.aborted) {
+						if (queued.requestId) void cancel(opts.token, opts.model, queued.requestId);
+						finishError(failed, "aborted", "排队等待已取消");
+						return;
+					}
+					const waitedMs = now() - attemptStart;
+					opts.onStatus?.(queueText(opts.model, queued, waitedMs, status));
+					if (waitedMs >= targetMs || now() >= deadline) break;
+					await wait(Math.min(pollMs, Math.max(0, Math.min(targetMs - waitedMs, deadline - now()))), opts.signal);
+					if (!queued.requestId) continue;
+					status = await probe(opts.token, opts.model, queued.requestId, opts.signal);
+					if (status && !QUEUE_WAITING_STATES.has(status)) break;
+				}
+
+				if (opts.signal?.aborted) {
+					if (queued.requestId) void cancel(opts.token, opts.model, queued.requestId);
+					finishError(failed, "aborted", "排队等待已取消");
+					return;
+				}
+				if (now() >= deadline) {
+					const limit = Math.round(maxWaitMs / 1000);
+					if (queued.requestId) void cancel(opts.token, opts.model, queued.requestId);
+					finishError(
+						failed,
+						"error",
+						`${queueSummary(opts.model, queued)}，已等满 ${limit}s 未放行；稍后重试或换个模型（PI_WB_QUEUE_MAX_WAIT_MS 可调）`,
+					);
+					return;
+				}
+				if (process.env.PI_WB_DEBUG) console.error(`[wb] queue retry #${attempts}`, JSON.stringify(queued));
+				opts.onStatus?.(undefined);
+				// 重发（不再发 start）
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			finishError(partial ?? opts.fallback(), "error", `WorkBuddy 请求失败：${message}`);
+		}
+	})();
+
+	return out;
 }
 
 class PendingLogin extends Error {}
@@ -266,6 +573,12 @@ function thinkingLevelMap(model: WbModel): Record<string, string | null> | undef
 	}
 	if (fixed) {
 		// 固定档位的模型：无论选哪档，上游都按它自己的默认 effort 跑。
+		// onlyReasoning 的模型连“不发参数”都不行（glm-5.0-turbo 裸请求会 400
+		// “reasoning effort value is not supported”），所以 off/minimal/max 也映射到固定档位，
+		// 保证永远发得出 reasoning_effort。
+		if (model.onlyReasoning) {
+			return { off: fixed, minimal: fixed, low: fixed, medium: fixed, high: fixed, xhigh: fixed, max: fixed };
+		}
 		return { off: null, minimal: null, low: fixed, medium: fixed, high: fixed, xhigh: null, max: null };
 	}
 	return undefined;
@@ -286,9 +599,27 @@ function toModelConfig(model: WbModel) {
 	};
 }
 
+/**
+ * 模型目录有**两套**，都读一遍取并集：
+ * · `/v2/enterprises/personal/models` —— WorkBuddy 个人版目录（含 Auto 三档 快速/均衡/极致）
+ * · `/v3/config` —— CodeBuddy 客户端下发配置（含 personal 目录里没有的 glm-5.3-flashx / kimi-k3.1-pro-highspeed 等）
+ * 两边都只用 `models` 字段；同一个 id 以 personal 目录为准（字段更全）。
+ */
+const CATALOG_PATHS = ["/v2/enterprises/personal/models", "/v3/config"];
+
 async function fetchCatalog(token: string, uid: string | undefined, signal: AbortSignal): Promise<WbModel[]> {
-	const data = await wbRequest<{ models?: WbModel[] }>("/v2/enterprises/personal/models", { token, uid, signal });
-	return Array.isArray(data.models) ? data.models : [];
+	const merged = new Map<string, WbModel>();
+	for (const path of CATALOG_PATHS) {
+		try {
+			const data = await wbRequest<{ models?: WbModel[] }>(path, { token, uid, signal });
+			for (const model of Array.isArray(data.models) ? data.models : []) {
+				if (model?.id && !merged.has(model.id)) merged.set(model.id, model);
+			}
+		} catch {
+			// 单个目录挂了不影响另一个；两个都挂由调用方回落 FALLBACK_MODELS。
+		}
+	}
+	return [...merged.values()];
 }
 
 function isChatModel(model: WbModel): boolean {
@@ -320,17 +651,44 @@ function streamSimple(
 		headers: { ...(model.headers ?? {}), ...chatHeaders(token) },
 	};
 
-	return openAICompletionsApi().streamSimple(outbound, context, {
-		...options,
-		onProviderStreamEvent: async (data, eventModel) => {
-			// usage.credit 是本次请求消耗的积分（上游最终 chunk 里给）。
-			const usage = (data as { usage?: { credit?: unknown } } | undefined)?.usage;
-			if (usage && typeof usage.credit === "number" && usage.credit > 0) {
-				if (process.env.PI_WB_DEBUG) console.error("[wb] credit", usage.credit);
-				noteCredit(usage.credit);
-			}
-			await options?.onProviderStreamEvent?.(data, eventModel);
-		},
+	const makeStream = () =>
+		openAICompletionsApi().streamSimple(outbound, context, {
+			...options,
+			onProviderStreamEvent: async (data, eventModel) => {
+				// usage.credit 是本次请求消耗的积分（上游最终 chunk 里给）。
+				const usage = (data as { usage?: { credit?: unknown } } | undefined)?.usage;
+				if (usage && typeof usage.credit === "number" && usage.credit > 0) {
+					if (process.env.PI_WB_DEBUG) console.error("[wb] credit", usage.credit);
+					noteCredit(usage.credit);
+				}
+				await options?.onProviderStreamEvent?.(data, eventModel);
+			},
+		});
+
+	return streamQueueAware({
+		token,
+		model: model.id,
+		signal: options?.signal,
+		makeStream,
+		fallback: () => ({
+			role: "assistant",
+			content: [],
+			api: outbound.api,
+			provider: outbound.provider,
+			model: outbound.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "error",
+			timestamp: Date.now(),
+		}),
+		// 单独的 key：footer 里的积分由 workbuddy 这条负责，别互相覆盖
+		onStatus: (text) => uiContext?.ui.setStatus("workbuddy-queue", text),
 	});
 }
 

@@ -87,7 +87,7 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 
 ## 模型选择（`/models` / alt+m）
 
-`extensions/model-tree.ts` 把扁平模型列表改成两级树：先选 provider（带模型数和当前 provider 标记），再选该 provider 的模型（带上下文 / 输出上限 / thinking / image 能力），选完即切换。内置 `/model` 保持不变，`/model provider/id` 仍可直接跳。
+`extensions/model-tree.ts` 把扁平模型列表改成两级树：先选 provider（带模型数和当前 provider 标记），再选该 provider 的模型（带上下文 / 输出上限 / thinking / image 能力），选完即切换，并可顺手选「保存为默认模型」——扩展 API 的 `pi.setModel()` 只切当前会话，所以保存直接写本机 `~/.pi/agent/settings.json` 的 `defaultProvider`/`defaultModel`（这两键在 `sync.excludeKeys` 里，属机器本地偏好，不参与同步）。内置 `/model` 保持不变，`/model provider/id` 仍可直接跳。
 
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。

@@ -6,13 +6,38 @@
  * provider（与 /model 的可见范围一致），第二级只列该 provider 的模型，并带上下文/
  * 输出上限/是否思考，方便同类模型之间比较。
  *
+ * 选完模型后可顺手把它保存为默认模型：扩展 API 的 pi.setModel() 只切当前会话，
+ * 不提供写默认值的入口，所以保存走直接编辑 ~/.pi/agent/settings.json 的
+ * defaultProvider/defaultModel（与 pi-sync-guard 同样的做法）。这两个键已在
+ * sync.excludeKeys 里，属机器本地偏好，不影响多机同步。
+ *
  * /model 在 TUI 里是内置命令（提交前就被截获），扩展无法替换，所以另给 alt+m 一键入口。
  */
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function compact(tokens: number): string {
 	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 === 0 ? 0 : 1)}M`;
 	return `${Math.round(tokens / 1000)}K`;
+}
+
+const SESSION_ONLY = "仅切换本会话";
+const SAVE_DEFAULT = "保存为默认模型（写入 settings.json）";
+
+function saveDefaultModel(model: { provider: string; id: string }): { ok: boolean; settingsPath: string; error?: string } {
+	const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+	const settingsPath = path.join(agentDir, "settings.json");
+	try {
+		const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : {};
+		settings.defaultProvider = model.provider;
+		settings.defaultModel = model.id;
+		fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+		return { ok: true, settingsPath };
+	} catch (error) {
+		return { ok: false, settingsPath, error: error instanceof Error ? error.message : String(error) };
+	}
 }
 
 async function pickModel(pi: ExtensionAPI, ctx: any): Promise<void> {
@@ -62,19 +87,27 @@ async function pickModel(pi: ExtensionAPI, ctx: any): Promise<void> {
 		const model = provider.models[modelItems.indexOf(choice)];
 		if (!model) continue;
 		const ok = await pi.setModel(model);
-		if (ok) ctx.ui.notify(`已切换：${model.provider}/${model.id}`, "info");
-		else ctx.ui.notify(`切换失败：${model.provider}/${model.id}`, "error");
+		if (!ok) {
+			ctx.ui.notify(`切换失败：${model.provider}/${model.id}`, "error");
+			return;
+		}
+		const action = await ctx.ui.select(`已选 ${model.provider}/${model.id}（本会话已生效）`, [SESSION_ONLY, SAVE_DEFAULT]);
+		if (action === SAVE_DEFAULT) {
+			const result = saveDefaultModel(model);
+			if (result.ok) ctx.ui.notify(`已保存默认模型：${model.provider}/${model.id} → ${result.settingsPath}`, "info");
+			else ctx.ui.notify(`保存默认模型失败：${result.error}`, "error");
+		}
 		return;
 	}
 }
 
 export default function modelTreeExtension(pi: ExtensionAPI) {
 	pi.registerCommand("models", {
-		description: "按 provider 分组选择模型（树状）",
+		description: "按 provider 分组选择模型（树状，可存为默认）",
 		handler: async (_args, ctx) => pickModel(pi, ctx),
 	});
 	pi.registerShortcut("alt+m", {
-		description: "模型树：先选 provider 再选模型",
+		description: "模型树：先选 provider 再选模型，可存为默认",
 		handler: async (ctx) => pickModel(pi, ctx),
 	});
 }
