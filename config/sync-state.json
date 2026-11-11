@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-10T03:38:09.766Z"
+      "lastSeen": "2026-11-11T03:12:58.421Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-11T06:49:48.387Z"
@@ -17,7 +17,7 @@
       "lastSeen": "2026-11-06T01:47:46.416Z"
     },
     "gxyusproecs9KHS2dK4tz": {
-      "lastSeen": "2026-10-23T04:21:59.256Z"
+      "lastSeen": "2026-11-10T07:09:39.103Z"
     }
   },
   "settings": {
@@ -94,7 +94,7 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/extensions/relays.json": {
-      "ts": 1790740665296,
+      "ts": 1794304270513,
       "machine": "yyp-home-pc"
     },
     "config/pi/web-search.json": {
