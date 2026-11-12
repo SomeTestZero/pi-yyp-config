@@ -5,7 +5,7 @@
       "lastSeen": "2026-11-12T04:20:50.050Z"
     },
     "NEU-20230908KJS": {
-      "lastSeen": "2026-11-11T07:22:40.188Z"
+      "lastSeen": "2026-11-12T03:25:27.463Z"
     },
     "VM-0-13-ubuntu": {
       "lastSeen": "2026-10-24T09:52:56.470Z"
@@ -86,6 +86,14 @@
     "npm:pi-antigravity": {
       "ts": 1794385597516,
       "machine": "yyp-home-pc"
+    },
+    "git:github.com/sometestzero/pi-agents-md-tracker": {
+      "ts": 1794457254332,
+      "machine": "remote"
+    },
+    "git:github.com/sometestzero/pi-volcengine-plans": {
+      "ts": 1794457254332,
+      "machine": "remote"
     }
   },
   "files": {
