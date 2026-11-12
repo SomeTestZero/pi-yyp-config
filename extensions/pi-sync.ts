@@ -4,6 +4,7 @@
  * 用一个私有 git 仓库作为唯一同步源，在多台山电脑之间同步：
  *   - settings.json（顶层键级三方合并，packages 并集，排除键不同步）
  *   - keybindings.json（整文件三方合并）
+ *   - models.json（整文件三方合并）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）
  * 删除通过墓碑（tombstone）传播；冲突在交互模式弹窗选择，自动模式跳过并挂起。
  *
@@ -52,6 +53,7 @@ const BUILTIN_EXCLUDED_KEYS = new Set([
 
 const REPO_SETTINGS = "config/pi/agent/settings.json";
 const REPO_KEYBINDINGS = "config/pi/agent/keybindings.json";
+const REPO_MODELS = "config/pi/agent/models.json";
 const REPO_WEBSEARCH = "config/pi/web-search.json";
 const REPO_EXT_DIR = "config/pi/agent/extensions";
 const REPO_STATE = "config/sync-state.json";
@@ -76,6 +78,9 @@ function liveSettingsPath(): string {
 }
 function liveKeybindingsPath(): string {
   return path.join(agentDir(), "keybindings.json");
+}
+function liveModelsPath(): string {
+  return path.join(agentDir(), "models.json");
 }
 function liveExtDir(): string {
   return path.join(agentDir(), "extensions");
@@ -618,6 +623,7 @@ function isIgnoredExtRel(rel: string): boolean {
 
 function liveAbsForRepoRel(rel: string, cfg: SyncConfig): string | null {
   if (rel === REPO_KEYBINDINGS) return liveKeybindingsPath();
+  if (rel === REPO_MODELS) return liveModelsPath();
   if (rel === REPO_WEBSEARCH) {
     return cfg.includeFiles.includes("web-search.json") ? path.join(piHome(), "web-search.json") : null;
   }
@@ -645,6 +651,7 @@ function walkFiles(dir: string, base = dir): string[] {
 function collectLiveFiles(cfg: SyncConfig): Map<string, string> {
   const m = new Map<string, string>();
   if (fs.existsSync(liveKeybindingsPath())) m.set(REPO_KEYBINDINGS, liveKeybindingsPath());
+  if (fs.existsSync(liveModelsPath())) m.set(REPO_MODELS, liveModelsPath());
   if (cfg.includeFiles.includes("web-search.json")) {
     const ws = path.join(piHome(), "web-search.json");
     if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
@@ -661,6 +668,8 @@ function collectTreeFiles(cfg: SyncConfig): Map<string, string> {
   const root = workDir();
   const kb = path.join(root, REPO_KEYBINDINGS);
   if (fs.existsSync(kb)) m.set(REPO_KEYBINDINGS, kb);
+  const mj = path.join(root, REPO_MODELS);
+  if (fs.existsSync(mj)) m.set(REPO_MODELS, mj);
   if (cfg.includeFiles.includes("web-search.json")) {
     const ws = path.join(root, REPO_WEBSEARCH);
     if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
@@ -1012,7 +1021,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
 
   if (changed) writeJson(treePath, tree);
 
-  // 文件（keybindings / web-search / extensions）
+  // 文件（keybindings / models / web-search / extensions）
   const liveFiles = collectLiveFiles(cfg);
   const treeFiles = collectTreeFiles(cfg);
   ensureAccepted(state, "files", machine, liveFiles.keys(), now);
