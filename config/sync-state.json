@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-12T03:03:47.769Z"
+      "lastSeen": "2026-11-13T06:36:37.496Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:06:09.640Z"
@@ -42,7 +42,7 @@
       "machine": "yyp-home-pc"
     },
     "extensionChangelogVersions": {
-      "ts": 1794228953001,
+      "ts": 1794457250044,
       "machine": "yyp-home-pc"
     }
   },
@@ -86,6 +86,14 @@
     "npm:pi-antigravity": {
       "ts": 1794385597516,
       "machine": "yyp-home-pc"
+    },
+    "git:github.com/sometestzero/pi-agents-md-tracker": {
+      "ts": 1794457254332,
+      "machine": "remote"
+    },
+    "git:github.com/sometestzero/pi-volcengine-plans": {
+      "ts": 1794457254332,
+      "machine": "remote"
     }
   },
   "files": {
