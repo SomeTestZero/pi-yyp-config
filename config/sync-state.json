@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-14T03:32:01.279Z"
+      "lastSeen": "2026-11-14T03:43:01.190Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:39:09.168Z"
@@ -95,8 +95,8 @@
       "ts": 1794457254332,
       "machine": "remote"
     },
-    "npm:pi-codebuddy-sdk": {
-      "ts": 1794627121271,
+    "npm:pi-codebuddy-oauth": {
+      "ts": 1794627781183,
       "machine": "yyp-home-pc"
     }
   },
@@ -188,6 +188,12 @@
       "id": "config/pi/agent/models.json",
       "ts": 1793599613499,
       "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-codebuddy-sdk",
+      "ts": 1794627781183,
+      "machine": "yyp-home-pc"
     }
   ],
   "accepted": {
@@ -206,7 +212,8 @@
         "npm:pi-subagent-feather": 1792047273181,
         "npm:pi-web-access": 1792047273181,
         "npm:pi-antigravity": 1794385597516,
-        "npm:pi-codebuddy-sdk": 1794627121271
+        "npm:pi-codebuddy-sdk": 1794627121271,
+        "npm:pi-codebuddy-oauth": 1794627781183
       },
       "NEU-20230908KJS": {
         "git:github.com/sometestzero/pi-agents-md-tracker": 1791942551608,
