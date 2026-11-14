@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-14T03:22:11.946Z"
+      "lastSeen": "2026-11-14T03:32:01.279Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:39:09.168Z"
@@ -94,6 +94,10 @@
     "git:github.com/sometestzero/pi-volcengine-plans": {
       "ts": 1794457254332,
       "machine": "remote"
+    },
+    "npm:pi-codebuddy-sdk": {
+      "ts": 1794627121271,
+      "machine": "yyp-home-pc"
     }
   },
   "files": {
@@ -201,7 +205,8 @@
         "npm:pi-goal-x": 1792047273181,
         "npm:pi-subagent-feather": 1792047273181,
         "npm:pi-web-access": 1792047273181,
-        "npm:pi-antigravity": 1794385597516
+        "npm:pi-antigravity": 1794385597516,
+        "npm:pi-codebuddy-sdk": 1794627121271
       },
       "NEU-20230908KJS": {
         "git:github.com/sometestzero/pi-agents-md-tracker": 1791942551608,
