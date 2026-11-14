@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-14T04:36:54.478Z"
+      "lastSeen": "2026-11-14T07:22:35.291Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:39:09.168Z"
@@ -94,10 +94,6 @@
     "git:github.com/sometestzero/pi-volcengine-plans": {
       "ts": 1794457254332,
       "machine": "remote"
-    },
-    "npm:pi-codebuddy-oauth": {
-      "ts": 1794627781183,
-      "machine": "yyp-home-pc"
     }
   },
   "files": {
@@ -193,6 +189,12 @@
       "type": "package",
       "id": "npm:pi-codebuddy-sdk",
       "ts": 1794631014470,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-codebuddy-oauth",
+      "ts": 1794640955284,
       "machine": "yyp-home-pc"
     }
   ],

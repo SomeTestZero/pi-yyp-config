@@ -12,7 +12,6 @@
     "git:git@github.com:SomeTestZero/pi-yyp-config.git",
     "npm:@narumitw/pi-btw",
     "npm:pi-antigravity",
-    "npm:pi-codebuddy-oauth",
     "npm:pi-goal-x",
     "npm:pi-subagent-feather",
     "npm:pi-web-access"
