@@ -36,7 +36,7 @@ pi update --extensions
 
 它会先完整同步配置、实际加载的包源码和本地扩展，再调用真正的 pi 更新其他包。同步失败或源码冲突时停止更新，不静默覆盖本机改动。更新完成后重启 pi。
 
-- **启动 / 退出 pi** → 保留自动同步；改了扩展会在退出时自动提交并推送
+- **启动 / 退出 pi** → 完全不做同步、不联网、不等待 Git；只有显式更新或 `/sync` 才执行
 - **两机改了同一配置键** → 下次 `/sync` 弹窗选择；同一源码文件的 Git 冲突会明确提示
 - **`/sync status`** → 查看配置包实际目录、未提交源码和远端差异
 - **不想包装命令时** → 仍可直接 `/sync`；它提供交互式冲突处理
@@ -48,7 +48,7 @@ pi update --extensions
 | `/sync` | 一键同步：拉取 → 合并 → 推送（交互解决冲突） |
 | `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
 | `/sync push` / `/sync pull` | 单向操作 |
-| `/sync on` / `/sync off` | 开关本机的自动同步 |
+| `/sync on` / `/sync off` | 开关显式同步（启动/退出永远不自动同步） |
 | `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步再更新其他包 |
 | `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后退出 pi 自动转发 |
 | `/sync lan off` | 清空内网镜像主机，关闭退出自动转发 |
@@ -84,6 +84,8 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 | 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
+
+**触发边界**：没有 `session_start` / `session_shutdown` 同步钩子。`/sync`、显式 `/sync lan` 和 `pi update --extensions` 是唯一会执行同步的入口；启动与退出不会被网络或 Git 操作卡住。
 
 ## 请求体防爆（image-budget）
 

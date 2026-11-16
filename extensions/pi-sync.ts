@@ -18,8 +18,8 @@
  *                         的 ~/pi-mirror 镜像（自动建仓/配 insteadOf），并记住
  *                         该主机，之后退出 pi 自动转发；/sync lan off 关闭
  *
- * 自动同步（sync.autoSync，默认开）：session_start 后后台拉取合并；退出时若有本地改动则推送。
- * 配置包内未提交的源码修改也会自动 commit/push，不再需要手工维护另一份 Git 克隆。
+ * 不在 session_start/session_shutdown 自动联网：启动、退出 pi 永远不等待 Git。
+ * 显式执行 /sync 或 pi update --extensions 时才提交、拉取、合并、推送。
  *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
@@ -2145,7 +2145,7 @@ async function statusText(cfg: SyncConfig): Promise<string> {
     .join("；");
   if (machines) lines.push(`机器: ${machines}`);
   if (pending.size > 0) lines.push(`⚠️ ${pending.size} 项冲突待解决（运行 /sync）`);
-  lines.push(`自动同步: ${cfg.enabled && cfg.autoSync ? "开" : "关"}`);
+  lines.push("启动/退出自动同步: 已禁用（仅 /sync 或 pi update --extensions 显式触发）");
   return lines.join("\n");
 }
 
@@ -2153,34 +2153,6 @@ async function statusText(cfg: SyncConfig): Promise<string> {
 // 自动同步
 // ---------------------------------------------------------------------------
 
-let autoRunning = false;
-
-async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promise<void> {
-  if (autoRunning) return;
-  autoRunning = true;
-  try {
-    const result = await runSync(ui, { push, interactive: false, materialize: true });
-    const interesting =
-      result.notes.length > 0 || result.errors.length > 0 || result.conflictsPending > 0;
-    if (!interesting || !ui) return;
-    if (result.errors.length > 0) {
-      ui.notify(`pi-sync（${reason}）：${result.errors[0]}`, "warning");
-      return;
-    }
-    const parts: string[] = [];
-    if (result.notes.length) parts.push(result.notes.slice(0, 6).join("；"));
-    if (result.conflictsPending) parts.push(`${result.conflictsPending} 项冲突待 /sync 处理`);
-    if (result.changedLocal) parts.push("配置已更新，/reload 后生效");
-    if (result.changedLocal) parts.push("配置/扩展已更新，重启 pi 后生效");
-    if (parts.length) ui.notify(`pi-sync：${parts.join("；")}`, "info");
-  } catch (e) {
-    try {
-      ui?.notify(`pi-sync（${reason}）失败: ${(e as Error).message}`, "warning");
-    } catch {}
-  } finally {
-    autoRunning = false;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // 扩展入口
@@ -2189,7 +2161,7 @@ async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promis
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("sync", {
     description:
-      "多机配置同步：/sync [push|pull|status|on|off]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
+      "多机配置同步：/sync [push|pull|status|install-update]、/sync init [repo]、/sync lan <ssh主机>；不在启动/退出时联网",
     handler: async (args, ctx) => {
       const ui: UiLike = ctx.ui;
       const [sub, ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
@@ -2245,7 +2217,7 @@ export default function (pi: ExtensionAPI) {
         if (sub === "on") sync.autoSync = true;
         live.sync = sync;
         writeJson(liveP, live);
-        ui.notify(`pi-sync 已${sub === "on" ? "开启（含自动同步）" : "关闭自动同步"}`, "info");
+        ui.notify(`pi-sync 已${sub === "on" ? "开启显式同步" : "关闭显式同步"}；启动和退出始终不自动联网`, "info");
         return;
       }
 
@@ -2284,7 +2256,7 @@ export default function (pi: ExtensionAPI) {
             sync.lanHosts = [...cfg.lanHosts, target];
             live.sync = sync;
             writeJson(liveP, live);
-            ui.notify(`pi-sync：已记住内网主机 ${target}，以后退出 pi 会自动转发内网镜像`, "info");
+            ui.notify(`pi-sync：已记住内网主机 ${target}；只在 /sync lan 时转发，不在退出时操作`, "info");
           }
         }
         if (!hosts.length) {
@@ -2320,31 +2292,12 @@ export default function (pi: ExtensionAPI) {
       }
 
       ui.notify(
-        "用法: /sync [push|pull|status|on|off]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
+        "用法: /sync [push|pull|status|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
         "warning",
       );
     },
   });
 
-  pi.on("session_start", async (event, ctx) => {
-    if (event.reason !== "startup") return;
-    const cfg = loadConfig();
-    if (!cfg.enabled || !cfg.autoSync || !cfg.repo) return;
-    const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
-    // 后台执行，不阻塞启动
-    void autoRun(ui, "启动同步", true);
-  });
-
-  pi.on("session_shutdown", async (event, ctx) => {
-    if (event.reason !== "quit") return;
-    const cfg = loadConfig();
-    if (!cfg.enabled || !cfg.autoSync || !cfg.repo) return;
-    if (!fs.existsSync(path.join(workDir(), ".git"))) return;
-    const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
-    await Promise.race([autoRun(ui, "退出同步", true), new Promise((r) => setTimeout(r, 20_000))]);
-    // 内网镜像：退出时顺手把最新状态转发到各内网机（不可达则静默跳过）
-    if (cfg.lanHosts.length) {
-      await Promise.race([lanPush(null, cfg.lanHosts, { quiet: true }), new Promise((r) => setTimeout(r, 90_000))]);
-    }
-  });
+  // 故意不监听 session_start/session_shutdown：pi 的开关必须即时完成。
+  // 同步只由 /sync、显式 LAN 命令或 pi update --extensions 包装器触发。
 }
