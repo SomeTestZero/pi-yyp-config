@@ -191,6 +191,33 @@ function jsonEq(a: unknown, b: unknown): boolean {
   return stableStringify(a) === stableStringify(b);
 }
 
+/** 更新提示的已读版本不是用户配置：逐来源取较新版本，避免无意义的跨机冲突。 */
+function mergeChangelogVersions(local: unknown, remote: unknown): Side | null {
+  if (!local || !remote || typeof local !== "object" || typeof remote !== "object" || Array.isArray(local) || Array.isArray(remote)) return null;
+  const out: Side = { ...(local as Side) };
+  for (const [key, value] of Object.entries(remote as Side)) {
+    const previous = out[key];
+    if (typeof previous !== "string" || typeof value !== "string") {
+      out[key] = value;
+      continue;
+    }
+    const parse = (version: string) => version.split(/[.-]/).map((part) => /^\d+$/.test(part) ? Number(part) : part);
+    const a = parse(previous);
+    const b = parse(value);
+    let newer = value;
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (a[i] === b[i]) continue;
+      if (a[i] === undefined) break;
+      if (b[i] === undefined) { newer = previous; break; }
+      if (typeof a[i] === "number" && typeof b[i] === "number") { if (a[i] > b[i]) newer = previous; break; }
+      if (String(a[i]) > String(b[i])) newer = previous;
+      break;
+    }
+    out[key] = newer;
+  }
+  return out;
+}
+
 function readJson(p: string): unknown | null {
   try {
     return JSON.parse(fs.readFileSync(p, "utf8"));
@@ -786,7 +813,16 @@ export function mergeSettingsKeys(opts: {
       // 否则本机较新，保留本机
       continue;
     }
-    // 真冲突：双方改成不同值
+    // 真冲突：双方改成不同值。更新提示版本是逐来源单调递增的记录，可安全合并。
+    if (k === "extensionChangelogVersions") {
+      const merged = mergeChangelogVersions(l, r);
+      if (merged) {
+        tree[k] = merged;
+        state.settings[k] = { ts: now, machine };
+        notes.push(`~${k}（合并各来源的已读版本）`);
+        continue;
+      }
+    }
     const winner = resolve ? resolve(k, l, r, remoteMeta[k]) : undefined;
     if (winner === "local") {
       state.settings[k] = { ts: now, machine };
