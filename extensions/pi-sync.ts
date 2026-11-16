@@ -1808,9 +1808,9 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.errors.push("另一个同步正在进行中，已跳过");
     return result;
   }
-  startLockHeartbeat();
   const pending = loadPending();
   try {
+    startLockHeartbeat();
     const cloneErr = await ensureClone(cfg);
     if (cloneErr) {
       result.errors.push(cloneErr);
