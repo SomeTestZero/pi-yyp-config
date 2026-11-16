@@ -214,10 +214,7 @@
         "npm:@narumitw/pi-btw": 1792047273181,
         "npm:pi-goal-x": 1792047273181,
         "npm:pi-subagent-feather": 1792047273181,
-        "npm:pi-web-access": 1792047273181,
-        "npm:pi-antigravity": 1794385597516,
-        "npm:pi-codebuddy-sdk": 1794627121271,
-        "npm:pi-codebuddy-oauth": 1794627781183
+        "npm:pi-web-access": 1792047273181
       },
       "NEU-20230908KJS": {
         "git:github.com/sometestzero/pi-agents-md-tracker": 1791942551608,
@@ -231,8 +228,7 @@
         "npm:@narumitw/pi-btw": 1791942551608,
         "npm:pi-goal-x": 1791942551608,
         "npm:pi-web-access": 1791942551608,
-        "npm:pi-subagent-feather": 1791942580987,
-        "npm:pi-antigravity": 1794557204223
+        "npm:pi-subagent-feather": 1791942580987
       },
       "yypmini": {
         "git:github.com/sometestzero/pi-agents-md-tracker": 1792376790317,
@@ -246,8 +242,7 @@
         "npm:@narumitw/pi-btw": 1792376790317,
         "npm:pi-goal-x": 1792376790317,
         "npm:pi-subagent-feather": 1792376790317,
-        "npm:pi-web-access": 1792376790317,
-        "npm:pi-antigravity": 1794794486176
+        "npm:pi-web-access": 1792376790317
       },
       "gxyusproecs9KHS2dK4tz": {
         "git:github.com/sometestzero/pi-agents-md-tracker": 1792660569907,
