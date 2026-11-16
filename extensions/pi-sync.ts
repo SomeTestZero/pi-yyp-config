@@ -6,7 +6,9 @@
  *   - keybindings.json（整文件三方合并）
  *   - models.json（整文件三方合并）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）
- * 删除通过墓碑（tombstone）传播；冲突在交互模式弹窗选择，自动模式跳过并挂起。
+ *   - 配置包自身实际加载目录的扩展、技能、提示词与主题源码
+ * 配置删除通过墓碑（tombstone）传播；包源码用 Git rebase 合并。
+ * 冲突在交互模式弹窗选择，自动模式跳过并挂起。
  *
  * 命令：
  *   /sync                 一键同步：拉取 → 合并 → 推送（交互解决冲突）
@@ -17,6 +19,7 @@
  *                         该主机，之后退出 pi 自动转发；/sync lan off 关闭
  *
  * 自动同步（sync.autoSync，默认开）：session_start 后后台拉取合并；退出时若有本地改动则推送。
+ * 配置包内未提交的源码修改也会自动 commit/push，不再需要手工维护另一份 Git 克隆。
  *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
@@ -28,7 +31,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -311,7 +314,8 @@ export function packageId(source: string): string {
     }
     return "npm:" + name.toLowerCase();
   }
-  let body = s.startsWith("git:") && !s.startsWith("git@") ? s.slice(4) : s;
+  // 同时接受 git:git@host:org/repo 与 git@host:org/repo；前者是 pi 包声明的合法写法。
+  let body = s.startsWith("git:") ? s.slice(4) : s;
   if (isLocalPathSource(body)) return "local:" + path.resolve(body);
   // 去掉末尾 @ref（ref 中不含 / 和 :）
   const at = body.lastIndexOf("@");
@@ -330,11 +334,11 @@ export function packageId(source: string): string {
 function gitCloneRelDir(source: string): string | null {
   let s = source.trim();
   const isGit =
-    (s.startsWith("git:") && !s.startsWith("git@")) ||
+    s.startsWith("git:") ||
     /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ||
     s.startsWith("git@");
   if (!isGit) return null;
-  if (s.startsWith("git:") && !s.startsWith("git@")) s = s.slice(4);
+  if (s.startsWith("git:")) s = s.slice(4);
   if (isLocalPathSource(s)) return null;
   const at = s.lastIndexOf("@");
   if (at > 0) {
@@ -1405,6 +1409,155 @@ async function materialize(prevLivePackages: unknown[], notes: string[], errors:
 }
 
 // ---------------------------------------------------------------------------
+// 配置包自身源码：同步实际加载目录，不再依赖手工维护另一份 Git 克隆
+// ---------------------------------------------------------------------------
+
+const SELF_SOURCE_DIRS = ["extensions", "skills", "prompts", "themes", "scripts", "docs"];
+const SELF_SOURCE_FILES = ["README.md", "CHANGELOG.md", "package.json", "package-lock.json"];
+
+function selfPackageEntry(cfg: SyncConfig): unknown | undefined {
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const entries = Array.isArray(live.packages) ? live.packages : [];
+  const id = selfPackageId(cfg);
+  const exact = entries.find((e) => packageId(entrySource(e)) === id);
+  if (exact) return exact;
+  // sync.repo 使用本地镜像路径时按仓库名匹配；packages 里只有一个自包才启用。
+  const base = (repo: string) => repo.replace(/[\\/]$/, "").split(/[\\/:]/).pop()?.replace(/\.git$/i, "").toLowerCase();
+  const repoName = cfg.repo ? base(cfg.repo) : undefined;
+  if (!repoName) return undefined;
+  const candidates = entries.filter((e) => base(entrySource(e)) === repoName);
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function selfSourceDir(cfg: SyncConfig): string | null {
+  const entry = selfPackageEntry(cfg);
+  if (!entry) return null;
+  const src = entrySource(entry);
+  const rel = gitCloneRelDir(src);
+  if (!rel) return null;
+  const candidates = [rel, rel.replace(/\.git$/i, "")];
+  const dir = candidates.map((relDir) => path.join(agentDir(), "git", relDir)).find((candidate) => fs.existsSync(path.join(candidate, ".git")));
+  if (!dir) return null;
+  // 包源与 sync.repo 可能一个写 git:git@host:path，另一个写 git@host:path；
+  // 以实际 origin 再校验一次，兼容历史配置且避免误操作其他本地路径仓库。
+  if (fs.existsSync(path.join(dir, ".git"))) {
+    const actual = cpExecGitConfig(dir);
+    if (actual && packageId(actual) !== packageId(src) && packageId(actual) !== packageId(cfg.repo ?? "")) return null;
+  }
+  return fs.existsSync(path.join(dir, ".git")) && fs.existsSync(path.join(dir, "package.json")) ? dir : null;
+}
+
+function cpExecGitConfig(dir: string): string {
+  try {
+    return execFileSync("git", ["-C", dir, "config", "--get", "remote.origin.url"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      env: GIT_ENV(),
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function selfGit(dir: string, args: string[], timeout = 30_000) {
+  return run("git", args, { cwd: dir, timeout, env: GIT_ENV() });
+}
+
+/** 只处理源码/清单，不提交 node_modules、日志等机器产物。 */
+function selfSourcePaths(dir: string): string[] {
+  return [
+    ...SELF_SOURCE_DIRS.filter((name) => fs.existsSync(path.join(dir, name))),
+    ...SELF_SOURCE_FILES.filter((name) => fs.existsSync(path.join(dir, name))),
+  ];
+}
+
+async function ensureSelfIdentity(dir: string): Promise<void> {
+  const name = await selfGit(dir, ["config", "user.name"]);
+  if (name.code !== 0 || !name.stdout.trim()) {
+    await selfGit(dir, ["config", "user.name", `pi-sync (${os.hostname()})`]);
+    await selfGit(dir, ["config", "user.email", "pi-sync@localhost"]);
+  }
+}
+
+/**
+ * 实际加载目录有改动时自动 commit，再 rebase 到远端最新状态。
+ * 文件是否存在由 Git 祖先关系判断：新机器从未拥有该文件不等于用户删除。
+ * 真正的内容冲突保留 rebase 现场，不 reset、不强推、不静默覆盖。
+ */
+async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean): Promise<void> {
+  const dir = selfSourceDir(cfg);
+  if (!dir) return;
+  const sourcePaths = selfSourcePaths(dir);
+  if (!sourcePaths.length) return;
+  await ensureSelfIdentity(dir);
+
+  const dirty = await selfGit(dir, ["status", "--porcelain", "--", ...sourcePaths]);
+  if (dirty.code !== 0) {
+    result.errors.push(`配置包状态读取失败：${dirty.stderr.trim().slice(0, 120)}`);
+    return;
+  }
+  const rebaseInProgress =
+    fs.existsSync(path.join(dir, ".git", "rebase-merge")) || fs.existsSync(path.join(dir, ".git", "rebase-apply"));
+  if (rebaseInProgress) {
+    result.errors.push(`配置包源码有未解决的 rebase：请在 ${dir} 完成或中止后再 /sync`);
+    return;
+  }
+  if (dirty.stdout.trim()) {
+    await selfGit(dir, ["add", "-A", "--", ...sourcePaths]);
+    const commit = await selfGit(dir, ["commit", "-m", `pi-sync: update package from ${cfg.machineId}`]);
+    if (commit.code !== 0) {
+      result.errors.push(`配置包改动提交失败：${commit.stderr.trim().slice(0, 160)}`);
+      return;
+    }
+    result.notes.push("配置包源码已自动提交");
+  }
+
+  const upstreamStatus = await selfGit(dir, ["rev-parse", "--verify", "@{upstream}"]);
+  if (upstreamStatus.code !== 0) await selfGit(dir, ["branch", "--set-upstream-to", "origin/main"]);
+  const fetch = await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+  if (fetch.code !== 0) {
+    if (push) result.errors.push("配置包源码拉取失败，请联网后运行 /sync push");
+    return;
+  }
+  const branch = (await selfGit(dir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim() || "main";
+  const upstream = `origin/${branch}`;
+  if ((await selfGit(dir, ["rev-parse", "--verify", upstream])).code !== 0) return;
+
+  const incoming = parseInt((await selfGit(dir, ["rev-list", "--count", `HEAD..${upstream}`])).stdout.trim(), 10) || 0;
+  if (incoming > 0) {
+    const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", upstream], 120_000);
+    if (rebase.code !== 0) {
+      result.errors.push(`配置包源码有冲突：请在 ${dir} 完成 git rebase，再运行 /sync`);
+      return;
+    }
+    result.notes.push("配置包源码已更新");
+    result.changedLocal = true;
+  }
+
+  if (!push) return;
+  const outgoing = parseInt((await selfGit(dir, ["rev-list", "--count", `${upstream}..HEAD`])).stdout.trim(), 10) || 0;
+  if (outgoing === 0) return;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const pushed = await selfGit(dir, ["push", "origin", `HEAD:${branch}`], PUSH_TIMEOUT_MS);
+    if (pushed.code === 0) {
+      result.pushed = true;
+      result.notes.push("配置包源码已推送");
+      return;
+    }
+    if (!/non-fast-forward|fetch first|rejected|stale/i.test(pushed.stderr) || attempt === 2) {
+      result.errors.push(`配置包源码推送失败：${pushed.stderr.trim().slice(0, 160)}`);
+      return;
+    }
+    await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+    const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", upstream], 120_000);
+    if (rebase.code !== 0) {
+      result.errors.push(`配置包源码有冲突：请在 ${dir} 完成 git rebase，再运行 /sync`);
+      return;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 锁
 // ---------------------------------------------------------------------------
 
@@ -1457,6 +1610,10 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       result.errors.push(cloneErr);
       return result;
     }
+    // 源码先完成 rebase + push：后续配置合并的 reset --hard 不会丢掉它。
+    await syncSelfSource(cfg, result, opts.push);
+    if (result.errors.length > 0) return result;
+
     const pending = loadPending();
     const prevLive = (readJson(liveSettingsPath()) ?? {}) as Side;
     const prevLivePackages = Array.isArray(prevLive.packages) ? (prevLive.packages as unknown[]) : [];
@@ -1905,6 +2062,12 @@ async function statusText(cfg: SyncConfig): Promise<string> {
   if (!fs.existsSync(path.join(workDir(), ".git"))) return "pi-sync：未初始化，运行 /sync init";
   const lines: string[] = [];
   lines.push(`仓库: ${cfg.repo}（工作克隆 ${workDir()}）`);
+  const selfDir = selfSourceDir(cfg);
+  if (selfDir) lines.push(`配置包实际目录: ${selfDir}`);
+  if (selfDir) {
+    const dirty = await selfGit(selfDir, ["status", "--porcelain", "--", ...selfSourcePaths(selfDir)]);
+    lines.push(`配置包源码: ${dirty.stdout.trim() ? "有未提交改动，下次同步自动提交" : "干净"}`);
+  }
   const pending = loadPending();
   // 本机待推送
   const excluded = excludedKeys(cfg);
@@ -1972,6 +2135,7 @@ async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promis
     if (result.notes.length) parts.push(result.notes.slice(0, 6).join("；"));
     if (result.conflictsPending) parts.push(`${result.conflictsPending} 项冲突待 /sync 处理`);
     if (result.changedLocal) parts.push("配置已更新，/reload 后生效");
+    if (result.changedLocal) parts.push("配置/扩展已更新，重启 pi 后生效");
     if (parts.length) ui.notify(`pi-sync：${parts.join("；")}`, "info");
   } catch (e) {
     try {
@@ -2114,7 +2278,7 @@ export default function (pi: ExtensionAPI) {
         if (result.conflictsResolved) parts.push(`解决了 ${result.conflictsResolved} 项冲突`);
         if (result.conflictsPending) parts.push(`${result.conflictsPending} 项冲突仍挂起`);
         if (push) parts.push(result.pushed ? "已推送" : "未推送");
-        if (result.changedLocal) parts.push("配置已更新，/reload 后生效");
+        if (result.changedLocal) parts.push("配置/扩展已更新，重启 pi 后生效");
         ui.notify(parts.length ? `pi-sync：${parts.join("；")}` : "pi-sync：已是最新", "info");
         return;
       }
