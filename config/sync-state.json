@@ -14,7 +14,7 @@
       "lastSeen": "2026-09-15T05:10:27.134Z"
     },
     "yypmini": {
-      "lastSeen": "2026-11-16T01:55:12.445Z"
+      "lastSeen": "2026-11-16T02:01:20.059Z"
     },
     "gxyusproecs9KHS2dK4tz": {
       "lastSeen": "2026-10-23T04:21:59.256Z"
@@ -42,8 +42,8 @@
       "machine": "yyp-home-pc"
     },
     "extensionChangelogVersions": {
-      "ts": 1793785671351,
-      "machine": "yyp-home-pc"
+      "ts": 1794794480047,
+      "machine": "yypmini"
     }
   },
   "packages": {
