@@ -191,6 +191,33 @@ function jsonEq(a: unknown, b: unknown): boolean {
   return stableStringify(a) === stableStringify(b);
 }
 
+/** 更新提示的已读版本不是用户配置：逐来源取较新版本，避免无意义的跨机冲突。 */
+function mergeChangelogVersions(local: unknown, remote: unknown): Side | null {
+  if (!local || !remote || typeof local !== "object" || typeof remote !== "object" || Array.isArray(local) || Array.isArray(remote)) return null;
+  const out: Side = { ...(local as Side) };
+  for (const [key, value] of Object.entries(remote as Side)) {
+    const previous = out[key];
+    if (typeof previous !== "string" || typeof value !== "string") {
+      out[key] = value;
+      continue;
+    }
+    const parse = (version: string) => version.split(/[.-]/).map((part) => /^\d+$/.test(part) ? Number(part) : part);
+    const a = parse(previous);
+    const b = parse(value);
+    let newer = value;
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (a[i] === b[i]) continue;
+      if (a[i] === undefined) break;
+      if (b[i] === undefined) { newer = previous; break; }
+      if (typeof a[i] === "number" && typeof b[i] === "number") { if (a[i] > b[i]) newer = previous; break; }
+      if (String(a[i]) > String(b[i])) newer = previous;
+      break;
+    }
+    out[key] = newer;
+  }
+  return out;
+}
+
 function readJson(p: string): unknown | null {
   try {
     return JSON.parse(fs.readFileSync(p, "utf8"));
@@ -761,6 +788,15 @@ export function mergeSettingsKeys(opts: {
     if (hasL && hasR && jsonEq(l, r)) {
       state.settings[k] = state.settings[k] ?? remoteMeta[k] ?? { ts: now, machine };
       continue; // 收敛
+    }
+    if (k === "extensionChangelogVersions" && hasL && hasR) {
+      const merged = mergeChangelogVersions(l, r);
+      if (merged) {
+        tree[k] = merged;
+        state.settings[k] = { ts: now, machine };
+        notes.push(`~${k}（合并各来源的已读版本）`);
+        continue;
+      }
     }
     if (!hasL && !hasR) continue; // 双方都删了
     if (!hasL && hasR) {
@@ -1484,7 +1520,7 @@ async function ensureSelfIdentity(dir: string): Promise<void> {
  * 文件是否存在由 Git 祖先关系判断：新机器从未拥有该文件不等于用户删除。
  * 真正的内容冲突保留 rebase 现场，不 reset、不强推、不静默覆盖。
  */
-async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean): Promise<void> {
+async function syncSelfSource(cfg: SyncConfig, result: RunResult): Promise<void> {
   const dir = selfSourceDir(cfg);
   if (!dir) return;
   const sourcePaths = selfSourcePaths(dir);
@@ -1534,7 +1570,6 @@ async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean)
     result.changedLocal = true;
   }
 
-  if (!push) return;
   const outgoing = parseInt((await selfGit(dir, ["rev-list", "--count", `${upstream}..HEAD`])).stdout.trim(), 10) || 0;
   if (outgoing === 0) return;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -1611,7 +1646,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       return result;
     }
     // 源码先完成 rebase + push：后续配置合并的 reset --hard 不会丢掉它。
-    await syncSelfSource(cfg, result, opts.push);
+    await syncSelfSource(cfg, result);
     if (result.errors.length > 0) return result;
 
     const pending = loadPending();
@@ -1770,6 +1805,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.ok = result.errors.length === 0;
     return result;
   } finally {
+    savePending(pending);
     releaseLock();
   }
 }
