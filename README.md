@@ -68,6 +68,28 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
 
+## 请求体防爆（image-budget）
+
+10-21 起随仓库分发 `config/pi/agent/extensions/image-budget.ts`：在 `context` 事件里给**每轮请求的图片**设硬上限（历史窗口 4 张 + 24MB 预算，最近读的图优先保留），根治 DeepSeek 的 `413 Request Entity Too Large` / `550`。配套 `config/pi/agent/models.json` 把单图编码压到 `1600px / 1.5MB / q82`，一张 12MB 的 4096 PNG 读进会话只存 0.22MB。
+
+- 自查：`/imgbudget`；调试：`PI_IMAGE_BUDGET_DEBUG=1`；关闭：`PI_IMAGE_BUDGET_OFF=1`
+- 根因、实测边界（45.3MB 通 / 49.3MB 挂 / 官方 48 MiB）、DeepSeek 视觉侧限制（约 1300×1300 网格、1024 token/图）与验证记录 → **[docs/image-budget.md](docs/image-budget.md)**
+
+## WorkBuddy 模型（CN / Intl 双 Provider）
+
+`extensions/workbuddy.ts` 把 WorkBuddy 订阅接成 pi 原生 provider，不需要 WorkBuddy 桌面端、不再跑本地反代：
+
+- `/login workbuddy-cn` → 登录 **WorkBuddy CN（国内版）**；`/login workbuddy-intl` → 登录 **WorkBuddy Intl（国际版）**。浏览器完成官方插件 OAuth 授权，两站凭据互相隔离。每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
+- `/model` 中分别显示 `workbuddy-cn/...`（CN）与 `workbuddy-intl/...`（Intl），底部模型栏同步显示对应 Provider。
+- 模型目录直接读上游 `/v2/enterprises/personal/models`：上下文窗口、最大输出、思考档位都以它为准；模型名后的 `(0.69x)` 是积分倍率。
+- `/thinking` 控制 `reasoning_effort`（按模型支持的档位映射）；两站本次会话已用积分分别显示在 footer（`WorkBuddy CN / Intl 1.23 cr`）。
+- `/wb`、`/wb intl` 查看对应站点模型与积分；`/wb refresh`、`/wb intl refresh` 强制刷新对应模型目录。
+- 非官方客户端，属灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品），账号风险自担；合规路径是 Coding Plan / Token Plan 的 API Key。
+
+## 模型选择（`/models` / alt+m）
+
+`extensions/model-tree.ts` 把扁平模型列表改成两级树：先选 provider（带模型数和当前 provider 标记），再选该 provider 的模型（带上下文 / 输出上限 / thinking / image 能力），选完即切换，并可顺手选「保存为默认模型」——扩展 API 的 `pi.setModel()` 只切当前会话，所以保存直接写本机 `~/.pi/agent/settings.json` 的 `defaultProvider`/`defaultModel`（这两键在 `sync.excludeKeys` 里，属机器本地偏好，不参与同步）。内置 `/model` 保持不变，`/model provider/id` 仍可直接跳。
+
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
 
