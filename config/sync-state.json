@@ -190,6 +190,12 @@
       "id": "npm:pi-codebuddy-oauth",
       "ts": 1794640955284,
       "machine": "yyp-home-pc"
+    },
+    {
+      "type": "file",
+      "id": "config/pi/agent/models.json",
+      "ts": 1793599613499,
+      "machine": "yyp-home-pc"
     }
   ],
   "accepted": {
