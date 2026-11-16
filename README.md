@@ -92,14 +92,15 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 - 自查：`/imgbudget`；调试：`PI_IMAGE_BUDGET_DEBUG=1`；关闭：`PI_IMAGE_BUDGET_OFF=1`
 - 根因、实测边界（45.3MB 通 / 49.3MB 挂 / 官方 48 MiB）、DeepSeek 视觉侧限制（约 1300×1300 网格、1024 token/图）与验证记录 → **[docs/image-budget.md](docs/image-budget.md)**
 
-## WorkBuddy 模型（`/login workbuddy`）
+## WorkBuddy 模型（CN / Intl 双 Provider）
 
 `extensions/workbuddy.ts` 把 WorkBuddy 订阅接成 pi 原生 provider，不需要 WorkBuddy 桌面端、不再跑本地反代：
 
-- `/login workbuddy` → 浏览器完成 WorkBuddy 官方插件 OAuth 授权。每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
-- 模型目录直接读上游 `/v2/enterprises/personal/models`：上下文窗口、最大输出、思考档位都以它为准；模型名后的 `(0.69x)` 是积分倍率。
-- `/thinking` 控制 `reasoning_effort`（按模型支持的档位映射）；本次会话已用积分显示在 footer（`WorkBuddy 1.23 cr`）。
-- `/wb` 查看模型列表与本次积分；`/wb refresh` 强制刷新模型目录。
+- `/login workbuddy-cn` → 登录 **WorkBuddy CN（国内版）**；`/login workbuddy-intl` → 登录 **WorkBuddy Intl（国际版）**。两站 OAuth 凭据互相隔离，每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
+- `/model` 分别显示 `workbuddy-cn/...`、`workbuddy-intl/...`；目录直接读上游 `/v2/enterprises/personal/models`，模型名后的 `(0.69x)` 是积分倍率。
+- `/thinking` 控制 `reasoning_effort`；footer 按站点显示本次会话已用积分（`WorkBuddy CN / Intl 1.23 cr`）。`/wb`、`/wb intl` 查看模型与积分；加 `refresh` 强制刷新目录。
+- **积分包含主代理和所有子代理**：真实 `usage.credit` 按请求成功结束时计一次，重复 usage 不重复累计；主子进程通过本地小文件账本共享，支持并行、递归、超时后 resume，CN/Intl 分开。账本只存积分，不存请求、回答或凭据，位于会话目录 `.workbuddy-credits/<run-id>/`；主会话 `/reload` 保留账本，子代理 resume 继承主会话账本。
+- 离线回归：`node --experimental-strip-types scripts/test-wb-credits.mjs`（假响应、主子并行、resume 与 usage 去重，不访问真实服务）。
 - 非官方客户端，属灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品），账号风险自担；合规路径是 Coding Plan / Token Plan 的 API Key。
 
 ## 模型选择（`/models` / alt+m）

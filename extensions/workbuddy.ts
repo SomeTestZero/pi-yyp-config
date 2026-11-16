@@ -3,7 +3,8 @@
  *
  * 为什么不走本地反代：pi 从 /login 直接走 WorkBuddy 官方给插件/CLI 的 OAuth 设备授权，
  * 拿到 token 后由本扩展直接与上游通信。没有本地端口、没有额外进程；换机器只要重新
- * `/login workbuddy` 一次（auth.json 按 pi-sync 的约定永不同步）。
+ * `/login workbuddy-cn`（CN）或 `/login workbuddy-intl`（Intl）一次
+ * （auth.json 按 pi-sync 的约定永不同步，两站凭据互不混用）。
  *
  * 与官方客户端的一致性：出站头补 x-agent-* / x-product / x-private-data 等归因头，
  * 否则用量不归到 WorkBuddy 使用端（实测）；模型目录直接读
@@ -12,7 +13,10 @@
  * 注意：这是非官方客户端，属于灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品）；
  * 账号风险自担。官方合规路径是 Coding Plan / Token Plan 的 API Key。
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	createAssistantMessageEventStream,
 	openAICompletionsApi,
@@ -26,8 +30,35 @@ import {
 	type TranscriptContext,
 } from "@earendil-works/pi-ai/compat";
 
-const BASE = "https://copilot.tencent.com";
-const ORIGIN = "https://www.codebuddy.cn";
+/**
+ * 两站使用对称的 provider id，在底部模型栏明确显示 workbuddy-cn / workbuddy-intl；
+ * OAuth 凭据、模型目录、思考档位和积分状态完全分开。
+ */
+interface WorkBuddySite {
+	id: "workbuddy-cn" | "workbuddy-intl";
+	name: string;
+	base: string;
+	origin: string;
+	language: string;
+}
+
+const SITES = {
+	cn: {
+		id: "workbuddy-cn",
+		name: "WorkBuddy CN（国内版）",
+		base: "https://copilot.tencent.com",
+		origin: "https://www.codebuddy.cn",
+		language: "zh-CN",
+	},
+	intl: {
+		id: "workbuddy-intl",
+		name: "WorkBuddy Intl（国际版）",
+		base: "https://www.codebuddy.ai",
+		origin: "https://www.codebuddy.ai",
+		language: "en-US",
+	},
+} as const satisfies Record<string, WorkBuddySite>;
+
 const VERSION = "5.8.0";
 /** 聊天出站 UA：官方桌面端三段式（WorkBuddy 5.8.x 实测形状）。 */
 const CHAT_UA = `WorkBuddy/${VERSION} WorkBuddy/${VERSION} CLI/2.137.1`;
@@ -91,16 +122,16 @@ function stableId(uid: string, purpose: "machine" | "session"): string {
 	return `wb-${purpose}-${hash.toString(16)}-${uid.slice(0, 8)}`;
 }
 
-function commonHeaders(token?: string, uid?: string): Record<string, string> {
+function commonHeaders(site: WorkBuddySite, token?: string, uid?: string): Record<string, string> {
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
 		accept: "application/json, text/plain, */*",
 		"x-requested-with": "XMLHttpRequest",
-		origin: ORIGIN,
-		referer: `${ORIGIN}/`,
+		origin: site.origin,
+		referer: `${site.origin}/`,
 		"user-agent": AUTH_UA,
 		"x-codebuddy-request": "1",
-		"accept-language": "zh-CN",
+		"accept-language": site.language,
 	};
 	if (uid) {
 		headers["x-machine-id"] = stableId(uid, "machine");
@@ -111,15 +142,15 @@ function commonHeaders(token?: string, uid?: string): Record<string, string> {
 }
 
 /** 聊天出站头：补官方客户端指纹，确保用量归因到 WorkBuddy。 */
-function chatHeaders(token: string): Record<string, string> {
+function chatHeaders(site: WorkBuddySite, token: string): Record<string, string> {
 	return {
 		"content-type": "application/json",
 		authorization: `Bearer ${token}`,
 		"user-agent": CHAT_UA,
-		origin: ORIGIN,
-		referer: `${ORIGIN}/`,
+		origin: site.origin,
+		referer: `${site.origin}/`,
 		"x-requested-with": "XMLHttpRequest",
-		"accept-language": "zh-CN",
+		"accept-language": site.language,
 		"x-agent-purpose": "conversation",
 		"x-agent-intent": "craft",
 		"x-ide-name": "WorkBuddy",
@@ -221,11 +252,11 @@ function looksThrottled(text: string): boolean {
 }
 
 /** 队列状态。拿不到（网络/上游没这条）就返回 undefined，调用方按计时继续等。 */
-async function queueStatus(token: string, model: string, requestId: string, signal?: AbortSignal): Promise<string | undefined> {
+async function queueStatus(site: WorkBuddySite, token: string, model: string, requestId: string, signal?: AbortSignal): Promise<string | undefined> {
 	try {
-		const res = await fetch(`${BASE}/v2/chat/queue/status`, {
+		const res = await fetch(`${site.base}/v2/chat/queue/status`, {
 			method: "POST",
-			headers: { ...chatHeaders(token), "X-Conversation-Request-ID": requestId },
+			headers: { ...chatHeaders(site, token), "X-Conversation-Request-ID": requestId },
 			body: JSON.stringify({ model }),
 			signal: signal ?? AbortSignal.timeout(15_000),
 		});
@@ -239,11 +270,11 @@ async function queueStatus(token: string, model: string, requestId: string, sign
 }
 
 /** 退队。失败无害：下一次请求撞 6022 再等一轮就好。 */
-async function queueCancel(token: string, model: string, requestId: string): Promise<void> {
+async function queueCancel(site: WorkBuddySite, token: string, model: string, requestId: string): Promise<void> {
 	try {
-		await fetch(`${BASE}/v2/chat/queue/cancel`, {
+		await fetch(`${site.base}/v2/chat/queue/cancel`, {
 			method: "POST",
-			headers: { ...chatHeaders(token), "X-Conversation-Request-ID": requestId },
+			headers: { ...chatHeaders(site, token), "X-Conversation-Request-ID": requestId },
 			body: JSON.stringify({ model }),
 			signal: AbortSignal.timeout(5_000),
 		});
@@ -285,6 +316,7 @@ function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export interface QueueStreamOptions {
+	site: WorkBuddySite;
 	token: string;
 	model: string;
 	signal?: AbortSignal;
@@ -311,8 +343,10 @@ export function streamQueueAware(opts: QueueStreamOptions): AssistantMessageEven
 	const out = createAssistantMessageEventStream();
 	const now = opts.now ?? Date.now;
 	const wait = opts.wait ?? sleepUnlessAborted;
-	const probe = opts.probe ?? queueStatus;
-	const cancel = opts.cancel ?? queueCancel;
+	const probe: NonNullable<QueueStreamOptions["probe"]> = opts.probe ??
+		((token, model, requestId, signal) => queueStatus(opts.site, token, model, requestId, signal));
+	const cancel: NonNullable<QueueStreamOptions["cancel"]> = opts.cancel ??
+		((token, model, requestId) => queueCancel(opts.site, token, model, requestId));
 	const pollMs = opts.pollMs ?? QUEUE_POLL_MS;
 	const maxWaitMs = opts.maxWaitMs ?? QUEUE_MAX_WAIT_MS;
 
@@ -432,12 +466,13 @@ export function streamQueueAware(opts: QueueStreamOptions): AssistantMessageEven
 class PendingLogin extends Error {}
 
 async function wbRequest<T>(
+	site: WorkBuddySite,
 	path: string,
 	opts: { method?: string; body?: unknown; token?: string; uid?: string; signal?: AbortSignal } = {},
 ): Promise<T> {
-	const res = await fetch(`${BASE}${path}`, {
+	const res = await fetch(`${site.base}${path}`, {
 		method: opts.method ?? "GET",
-		headers: commonHeaders(opts.token, opts.uid),
+		headers: commonHeaders(site, opts.token, opts.uid),
 		body: opts.method === "POST" ? JSON.stringify(opts.body ?? {}) : undefined,
 		signal: opts.signal ?? AbortSignal.timeout(30_000),
 	});
@@ -476,24 +511,24 @@ function toCredentials(token: TokenData, extra: Record<string, unknown> = {}): O
 	};
 }
 
-async function login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-	const start = await wbRequest<{ state?: string; authUrl?: string }>("/v2/plugin/auth/state?platform=CLI", {
+async function login(site: WorkBuddySite, callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+	const start = await wbRequest<{ state?: string; authUrl?: string }>(site, "/v2/plugin/auth/state?platform=CLI", {
 		method: "POST",
 		body: {},
 	});
 	if (!start.state || !start.authUrl) throw new Error("WorkBuddy 登录接口未返回 state/authUrl");
-	callbacks.onAuth({ url: start.authUrl, instructions: "用你的 WorkBuddy 账号完成登录/授权" });
+	callbacks.onAuth({ url: start.authUrl, instructions: `用你的 ${site.name} 账号完成登录/授权` });
 
 	const deadline = Date.now() + LOGIN_TIMEOUT_MS;
 	let token: TokenData | undefined;
 	for (;;) {
 		try {
-			token = await wbRequest<TokenData>(`/v2/plugin/auth/token?state=${encodeURIComponent(start.state)}`);
+			token = await wbRequest<TokenData>(site, `/v2/plugin/auth/token?state=${encodeURIComponent(start.state)}`);
 			break;
 		} catch (error) {
 			if (!(error instanceof PendingLogin)) throw error;
 			if (callbacks.signal?.aborted) throw new Error("WorkBuddy 登录已取消");
-			if (Date.now() >= deadline) throw new Error("WorkBuddy 登录超时，请重新 /login workbuddy");
+			if (Date.now() >= deadline) throw new Error(`${site.name} 登录超时，请重新 /login ${site.id}`);
 			callbacks.onProgress?.(`等待授权… ${Math.round((deadline - Date.now()) / 1000)}s`);
 			await sleep(POLL_MS);
 		}
@@ -504,6 +539,7 @@ async function login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> 
 	let nickname: string | undefined;
 	try {
 		const account = await wbRequest<{ uid?: string; nickname?: string }>(
+			site,
 			`/v2/plugin/login/account?state=${encodeURIComponent(start.state)}`,
 			{ token: token.accessToken },
 		);
@@ -515,13 +551,13 @@ async function login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> 
 	return toCredentials(token, { uid, nickname });
 }
 
-async function refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
-	const headers = commonHeaders();
+async function refreshToken(site: WorkBuddySite, credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
+	const headers = commonHeaders(site);
 	delete headers["content-type"];
 	headers["x-refresh-token"] = credentials.refresh;
 	headers["x-auth-refresh-source"] = "plugin";
 
-	const res = await fetch(`${BASE}/v2/plugin/auth/token/refresh`, {
+	const res = await fetch(`${site.base}/v2/plugin/auth/token/refresh`, {
 		method: "POST",
 		headers,
 		body: "{}",
@@ -584,7 +620,7 @@ function thinkingLevelMap(model: WbModel): Record<string, string | null> | undef
 	return undefined;
 }
 
-function toModelConfig(model: WbModel) {
+function toModelConfig(site: WorkBuddySite, model: WbModel) {
 	const thinking = thinkingLevelMap(model);
 	return {
 		id: model.id,
@@ -607,11 +643,11 @@ function toModelConfig(model: WbModel) {
  */
 const CATALOG_PATHS = ["/v2/enterprises/personal/models", "/v3/config"];
 
-async function fetchCatalog(token: string, uid: string | undefined, signal: AbortSignal): Promise<WbModel[]> {
+async function fetchCatalog(site: WorkBuddySite, token: string, uid: string | undefined, signal: AbortSignal): Promise<WbModel[]> {
 	const merged = new Map<string, WbModel>();
 	for (const path of CATALOG_PATHS) {
 		try {
-			const data = await wbRequest<{ models?: WbModel[] }>(path, { token, uid, signal });
+			const data = await wbRequest<{ models?: WbModel[] }>(site, path, { token, uid, signal });
 			for (const model of Array.isArray(data.models) ? data.models : []) {
 				if (model?.id && !merged.has(model.id)) merged.set(model.id, model);
 			}
@@ -626,46 +662,127 @@ function isChatModel(model: WbModel): boolean {
 	return Boolean(model.id && model.maxInputTokens);
 }
 
-let uiContext: any;
-let sessionCredits = 0;
-
-function renderCredits(): void {
-	uiContext?.ui.setStatus("workbuddy", sessionCredits > 0 ? `WorkBuddy ${sessionCredits.toFixed(2)} cr` : undefined);
+/**
+ * 主/子 Pi 是不同进程，不能共享 sessionCredits。每进程写自己的小文件，父会话
+ * 按本次 run 目录求和；子进程继承目录，resume 开新 run，避免重复计算历史。
+ * 账本只含积分数字，不写请求、回答、token 或凭据。
+ */
+export function creditDelta(data: unknown): number | undefined {
+	if (!data || typeof data !== "object") return undefined;
+	const credit = (data as { usage?: { credit?: unknown } }).usage?.credit;
+	return typeof credit === "number" && Number.isFinite(credit) && credit > 0 ? credit : undefined;
 }
 
-function noteCredit(credit: number): void {
-	sessionCredits += credit;
-	renderCredits();
+export function readCreditLedger(dir: string): Record<string, number> {
+	const totals: Record<string, number> = {};
+	for (const file of fs.readdirSync(dir)) {
+		if (!/^[0-9a-f-]{36}\.json$/i.test(file)) continue;
+		try {
+			const raw: unknown = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+			if (!raw || typeof raw !== "object" || (raw as { version?: unknown }).version !== 1) continue;
+			const credits = (raw as { credits?: unknown }).credits;
+			if (!credits || typeof credits !== "object") continue;
+			for (const [provider, credit] of Object.entries(credits)) {
+				if (!/^workbuddy-(?:cn|intl)$/.test(provider)) continue;
+				if (typeof credit !== "number" || !Number.isFinite(credit) || credit <= 0) continue;
+				totals[provider] = (totals[provider] ?? 0) + credit;
+			}
+		} catch {
+			// 写入中的临时文件不带 .json 后缀；坏文件不影响其他子进程。
+		}
+	}
+	return totals;
+}
+
+export class CreditLedger {
+	readonly dir: string;
+	private readonly file: string;
+	private readonly credits: Record<string, number> = {};
+	private queue: Promise<void> = Promise.resolve();
+	private stopped = false;
+
+	constructor(sessionFile: string | undefined, cwd: string, agentDir: string, inheritedDir?: string) {
+		const sessionDir = sessionFile ? path.dirname(sessionFile) : path.join(agentDir, "sessions", "ephemeral", process.pid.toString());
+		this.dir = inheritedDir ?? path.join(sessionDir, ".workbuddy-credits", randomUUID());
+		this.file = path.join(this.dir, `${randomUUID()}.json`);
+		fs.mkdirSync(this.dir, { recursive: true });
+		fs.writeFileSync(this.file, JSON.stringify(this.entry()), { encoding: "utf8", mode: 0o600 });
+	}
+
+	add(provider: string, credit: number): void {
+		if (this.stopped || !Number.isFinite(credit) || credit <= 0) return;
+		this.credits[provider] = (this.credits[provider] ?? 0) + credit;
+		this.queue = this.queue.then(async () => {
+			const temporary = `${this.file}.${randomUUID()}.tmp`;
+			try {
+				await fs.promises.writeFile(temporary, JSON.stringify(this.entry()), { encoding: "utf8", mode: 0o600 });
+				await fs.promises.rename(temporary, this.file);
+			} catch {
+				// 账本失败不能中断模型响应；本进程内存计数仍保留。
+			} finally {
+				await fs.promises.rm(temporary, { force: true }).catch(() => undefined);
+			}
+		});
+	}
+
+	read(): Record<string, number> {
+		return readCreditLedger(this.dir);
+	}
+
+	async close(): Promise<void> {
+		this.stopped = true;
+		await this.queue;
+	}
+
+	private entry(): { version: 1; credits: Record<string, number>; updatedAt: string } {
+		return { version: 1, credits: { ...this.credits }, updatedAt: new Date().toISOString() };
+	}
+}
+
+let uiContext: any;
+let creditLedger: CreditLedger | undefined;
+let ledgerParentDir: string | undefined;
+
+function renderCredits(site: WorkBuddySite): void {
+	const credits = creditLedger?.read()[site.id] ?? 0;
+	const suffix = site.id === "workbuddy-intl" ? "Intl" : "CN";
+	uiContext?.ui.setStatus(site.id, credits > 0 ? `WorkBuddy ${suffix} ${credits.toFixed(2)} cr` : undefined);
+}
+
+function noteCredit(site: WorkBuddySite, credit: number): void {
+	creditLedger?.add(site.id, credit);
+	renderCredits(site);
 }
 
 function streamSimple(
+	site: WorkBuddySite,
 	model: Model<Api>,
 	context: TranscriptContext,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const token = options?.apiKey;
-	if (!token) throw new Error("WorkBuddy 未登录：先运行 /login workbuddy");
+	if (!token) throw new Error(`${site.name} 未登录：先运行 /login ${site.id}`);
 
 	const outbound: Model<Api> = {
 		...model,
-		headers: { ...(model.headers ?? {}), ...chatHeaders(token) },
+		headers: { ...(model.headers ?? {}), ...chatHeaders(site, token) },
 	};
 
-	const makeStream = () =>
-		openAICompletionsApi().streamSimple(outbound, context, {
+	let credit: number | undefined;
+	const makeStream = () => {
+		credit = undefined;
+		return openAICompletionsApi().streamSimple(outbound, context, {
 			...options,
 			onProviderStreamEvent: async (data, eventModel) => {
-				// usage.credit 是本次请求消耗的积分（上游最终 chunk 里给）。
-				const usage = (data as { usage?: { credit?: unknown } } | undefined)?.usage;
-				if (usage && typeof usage.credit === "number" && usage.credit > 0) {
-					if (process.env.PI_WB_DEBUG) console.error("[wb] credit", usage.credit);
-					noteCredit(usage.credit);
-				}
+				// 同一响应可重复携带 usage 快照，只在最终 done 时记一次。
+				credit = creditDelta(data) ?? credit;
 				await options?.onProviderStreamEvent?.(data, eventModel);
 			},
 		});
+	};
 
-	return streamQueueAware({
+	const base = streamQueueAware({
+		site,
 		token,
 		model: model.id,
 		signal: options?.signal,
@@ -687,69 +804,104 @@ function streamSimple(
 			stopReason: "error",
 			timestamp: Date.now(),
 		}),
-		// 单独的 key：footer 里的积分由 workbuddy 这条负责，别互相覆盖
-		onStatus: (text) => uiContext?.ui.setStatus("workbuddy-queue", text),
+		// 站点各自使用独立状态栏 key，避免国内/国际的排队提示互相覆盖。
+		onStatus: (text) => uiContext?.ui.setStatus(`${site.id}-queue`, text),
 	});
+
+	// lazy stream 没有 tap；只观察最终 done，不拦截内容，排队重试不重复计费。
+	const out = createAssistantMessageEventStream();
+	void (async () => {
+		let response: AssistantMessage | undefined;
+		for await (const event of base) {
+			out.push(event);
+			if (event.type === "done") {
+				response = event.message;
+				if (credit !== undefined) {
+					if (process.env.PI_WB_DEBUG) console.error("[wb] credit", credit);
+					noteCredit(site, credit);
+				}
+			} else if (event.type === "error") response = event.error;
+		}
+		out.end(response);
+	})();
+	return out;
 }
 
 export default function workbuddyExtension(pi: ExtensionAPI) {
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		uiContext = ctx;
-		sessionCredits = 0;
-		renderCredits();
+		const inheritedDir = event.reason === "reload" ? creditLedger?.dir : undefined;
+		// reload 保留主会话累计；子 Pi resume 继承父账本；新主会话开新 run。
+		ledgerParentDir = process.env.PI_WB_CREDITS_DIR;
+		creditLedger = new CreditLedger(ctx.sessionManager.getSessionFile(), ctx.cwd, getAgentDir(), inheritedDir ?? ledgerParentDir);
+		process.env.PI_WB_CREDITS_DIR = creditLedger.dir;
+		for (const site of Object.values(SITES)) renderCredits(site);
+	});
+
+	pi.on("session_shutdown", async (event) => {
+		await creditLedger?.close();
+		if (event.reason !== "reload") creditLedger = undefined;
+		if (ledgerParentDir) process.env.PI_WB_CREDITS_DIR = ledgerParentDir;
+		else delete process.env.PI_WB_CREDITS_DIR;
 	});
 
 	pi.registerCommand("wb", {
-		description: "WorkBuddy：本次积分 / 模型倍率 / 刷新模型目录",
+		description: "WorkBuddy：/wb [intl] [refresh]，查看积分或刷新对应站点模型",
 		handler: async (args, ctx) => {
-			if (args.trim() === "refresh") {
-				const result = await ctx.modelRegistry.refresh({ force: true, providers: ["workbuddy"] });
+			const words = args.trim().split(/\s+/).filter(Boolean);
+			const intl = words.includes("intl") || words.includes("international");
+			const site = intl ? SITES.intl : SITES.cn;
+			if (words.includes("refresh")) {
+				const result = await ctx.modelRegistry.refresh({ force: true, providers: [site.id] });
 				const failed = [...result.errors.values()].map((error) => error.message).join("; ");
 				ctx.ui.notify(
-					failed ? `WorkBuddy 模型刷新失败：${failed}` : "WorkBuddy 模型目录已刷新",
+					failed ? `${site.name} 模型刷新失败：${failed}` : `${site.name} 模型目录已刷新`,
 					failed ? "warning" : "info",
 				);
 				return;
 			}
-			const token = await ctx.modelRegistry.getApiKeyForProvider("workbuddy").catch(() => undefined);
+			const token = await ctx.modelRegistry.getApiKeyForProvider(site.id).catch(() => undefined);
 			if (!token) {
-				ctx.ui.notify("WorkBuddy 未登录：先运行 /login workbuddy", "warning");
+				ctx.ui.notify(`${site.name} 未登录：先运行 /login ${site.id}`, "warning");
 				return;
 			}
-			const models = ctx.modelRegistry.getModelsOfType("chat", "workbuddy");
+			const models = ctx.modelRegistry.getModelsOfType("chat", site.id);
 			const lines = models.map((model) => {
 				const context = `${Math.round(model.contextWindow / 1000)}K`;
 				const output = `${Math.round(model.maxTokens / 1000)}K`;
 				return `${model.name}  · ctx ${context} / out ${output}`;
 			});
-			await ctx.ui.select(`WorkBuddy · 本次已用 ${sessionCredits.toFixed(2)} credits`, lines);
+			const credits = creditLedger?.read()[site.id] ?? 0;
+			await ctx.ui.select(`${site.name} · 本次已用 ${credits.toFixed(2)} credits`, lines);
 		},
 	});
 
-	pi.registerProvider("workbuddy", {
-		name: "WorkBuddy",
-		baseUrl: `${BASE}/v2`,
-		api: "openai-completions",
-		oauth: {
-			name: "WorkBuddy",
-			isSubscription: true,
-			login,
-			refreshToken,
-			getApiKey: (credentials) => credentials.access,
-		},
-		models: FALLBACK_MODELS.filter(isChatModel).map(toModelConfig),
-		async refreshModels(context) {
-			if (context.credential?.type !== "oauth") return FALLBACK_MODELS.filter(isChatModel).map(toModelConfig);
-			try {
-				const uid = typeof context.credential.uid === "string" ? context.credential.uid : undefined;
-				const models = await fetchCatalog(context.credential.access, uid, context.signal);
-				const chat = models.filter(isChatModel);
-				if (chat.length === 0) return FALLBACK_MODELS.filter(isChatModel).map(toModelConfig);
-				return chat.map(toModelConfig);
-			} catch {
-				return FALLBACK_MODELS.filter(isChatModel).map(toModelConfig);
-			}
-		},
-		streamSimple,
-	});
+	for (const site of Object.values(SITES)) {
+		pi.registerProvider(site.id, {
+			name: site.name,
+			baseUrl: `${site.base}/v2`,
+			api: "openai-completions",
+			oauth: {
+				name: site.name,
+				isSubscription: true,
+				login: (callbacks) => login(site, callbacks),
+				refreshToken: (credentials, signal) => refreshToken(site, credentials, signal),
+				getApiKey: (credentials) => credentials.access,
+			},
+			models: FALLBACK_MODELS.filter(isChatModel).map((model) => toModelConfig(site, model)),
+			async refreshModels(context) {
+				const fallback = () => FALLBACK_MODELS.filter(isChatModel).map((model) => toModelConfig(site, model));
+				if (context.credential?.type !== "oauth") return fallback();
+				try {
+					const uid = typeof context.credential.uid === "string" ? context.credential.uid : undefined;
+					const models = await fetchCatalog(site, context.credential.access, uid, context.signal);
+					const chat = models.filter(isChatModel);
+					return chat.length ? chat.map((model) => toModelConfig(site, model)) : fallback();
+				} catch {
+					return fallback();
+				}
+			},
+			streamSimple: (model, context, options) => streamSimple(site, model, context, options),
+		});
+	}
 }

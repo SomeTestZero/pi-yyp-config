@@ -1639,17 +1639,14 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.errors.push("另一个同步正在进行中，已跳过");
     return result;
   }
+  startLockHeartbeat();
+  const pending = loadPending();
   try {
     const cloneErr = await ensureClone(cfg);
     if (cloneErr) {
       result.errors.push(cloneErr);
       return result;
     }
-    // 源码先完成 rebase + push：后续配置合并的 reset --hard 不会丢掉它。
-    await syncSelfSource(cfg, result);
-    if (result.errors.length > 0) return result;
-
-    const pending = loadPending();
     const prevLive = (readJson(liveSettingsPath()) ?? {}) as Side;
     const prevLivePackages = Array.isArray(prevLive.packages) ? (prevLive.packages as unknown[]) : [];
 
@@ -1799,6 +1796,10 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
         result.changedLocal = result.changedLocal || applied2.changed;
       }
     }
+
+    // 包源码必须最后同步：phase2/commitMerge 会对同一远端工作副本 reset --hard。
+    // 若提前推送，旧工作副本会把刚合并的扩展再次覆盖（WorkBuddy 回退的根因）。
+    await syncSelfSource(cfg, result);
 
     savePending(pending);
     result.conflictsPending = pending.size;
