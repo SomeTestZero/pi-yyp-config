@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-16T03:44:04.329Z"
+      "lastSeen": "2026-11-16T07:31:56.424Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:39:09.168Z"
@@ -126,8 +126,8 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/models.json": {
-      "ts": 1793603404642,
-      "machine": "NEU-20230908KJS"
+      "ts": 1794814316414,
+      "machine": "yyp-home-pc"
     }
   },
   "tombstones": [
@@ -177,12 +177,6 @@
       "type": "package",
       "id": "npm:pi-subagents",
       "ts": 1789550123895,
-      "machine": "yyp-home-pc"
-    },
-    {
-      "type": "file",
-      "id": "config/pi/agent/models.json",
-      "ts": 1793599613499,
       "machine": "yyp-home-pc"
     },
     {
