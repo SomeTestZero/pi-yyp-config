@@ -34,10 +34,11 @@ pi          # 启动后执行：
 pi update --extensions
 ```
 
-它会先完整同步配置、实际加载的包源码和本地扩展，再调用真正的 pi 更新其他包。同步失败或源码冲突时停止更新，不静默覆盖本机改动。更新完成后重启 pi。
+它会先完整同步配置、实际加载的包源码和本地扩展，**并卸载清单中已移除的包**（pi 核心更新只补装不卸载，卸载对账由 pi-sync 完成），再调用真正的 pi 更新其他包。同步失败或源码冲突时停止更新，不静默覆盖本机改动。更新完成后重启 pi。
 
-- **启动 / 退出 pi** → 保留自动同步；改了扩展会在退出时自动提交并推送
-- **两机改了同一配置键** → 下次 `/sync` 弹窗选择；同一源码文件的 Git 冲突会明确提示
+- **主力机改完配置/插件** → 主动 `/sync push`（或 `pi update --extensions`）推送；开关 pi 本身不再触发任何同步
+- **其他机对齐** → 装过一次 `/sync install-update` 后，只跑 `pi update --extensions` 即完整同步 + 卸载对账 + 更新
+- **两机改了同一配置键** → 下次 `/sync` 弹窗选择；非交互（CLI/包装）下冲突挂起跳过、保留本机改动，源码 Git 冲突会明确提示并停止
 - **`/sync status`** → 查看配置包实际目录、未提交源码和远端差异
 - **不想包装命令时** → 仍可直接 `/sync`；它提供交互式冲突处理
 
@@ -48,10 +49,10 @@ pi update --extensions
 | `/sync` | 一键同步：拉取 → 合并 → 推送（交互解决冲突） |
 | `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
 | `/sync push` / `/sync pull` | 单向操作 |
-| `/sync on` / `/sync off` | 开关本机的自动同步 |
-| `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步再更新其他包 |
-| `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后退出 pi 自动转发 |
-| `/sync lan off` | 清空内网镜像主机，关闭退出自动转发 |
+| `/sync on` / `/sync off` | 开关本机同步（enabled）；同步仅由 /sync 或 pi update --extensions 手动触发 |
+| `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步（含卸载对账）再更新其他包 |
+| `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后 `/sync lan`（不带参数）手动转发 |
+| `/sync lan off` | 清空内网镜像主机 |
 
 ## 内网机器（无外网）
 
@@ -67,10 +68,10 @@ pi install git:git@github.com:SomeTestZero/pi-yyp-config   # 会被 insteadOf �
 # settings.json 设（sync 键本机有效，不参与同步）：
 #   "sync": { "repo": "/home/<用户>/pi-mirror/pi-yyp-config.git",
 #             "excludeKeys": ["defaultProvider","defaultModel"] }
-pi                        # 启动即自动拉取合并，补齐全部插件/配置
+pi                        # 启动后 /sync（或 pi update --extensions）拉取合并，补齐全部插件/配置
 ```
 
-注意：`npm:` 来源的包无法离线安装，把主力机 `~/.pi/agent/npm/` 整目录拷到内网机同路径即可；`auth.json` 按设计永不同步，内网机用 `/infcode-connect` 共享主力机登录态。主力机不在内网时退出转发自动静默跳过。
+注意：`npm:` 来源的包无法离线安装，把主力机 `~/.pi/agent/npm/` 整目录拷到内网机同路径即可；`auth.json` 按设计永不同步，内网机用 `/infcode-connect` 共享主力机登录态。主力机不在内网时 `/sync lan` 转发自动静默跳过。
 
 ## 同步范围
 
@@ -78,7 +79,7 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 | --- | --- | --- |
 | 包资源（extensions/skills/prompts/themes/docs/scripts） | 实际安装目录 ↔ 仓库根目录各目录 | `/sync` 自动提交、rebase、推送；同时兼容无 `.git` 后缀安装目录 |
 | 全局设置 | `~/.pi/agent/settings.json` ↔ `config/pi/agent/settings.json` | pi-sync 扩展（顶层键级三方合并） |
-| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装 |
+| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装，并按 accepted/墓碑候选卸载已移除的包 |
 | 键位绑定 | `keybindings.json` | pi-sync 扩展 |
 | 模型配置 | `~/.pi/agent/models.json` ↔ `config/pi/agent/models.json` | pi-sync 扩展（整文件三方合并） |
 | 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
@@ -118,11 +119,11 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 {
   "sync": {
     "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
-    "enabled": true,     // 总开关
-    "autoSync": true,    // 启动拉取 + 退出推送
+    "enabled": true,     // 总开关（关闭后 /sync 与 CLI 均跳过）
+    "autoSync": true,    // 兼容旧配置保留解析；已无钩子消费，开关 pi 不再自动同步
     "excludeKeys": [],   // 额外排除的 settings 键
     "includeFiles": [],  // 额外纳入的文件，如 ["web-search.json"]
-    "lanHosts": []       // 内网镜像主机（ssh 别名），退出 pi 时自动转发
+    "lanHosts": []       // 内网镜像主机（ssh 别名），/sync lan 手动转发
   }
 }
 ```

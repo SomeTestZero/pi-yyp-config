@@ -10,31 +10,45 @@
  * 配置删除通过墓碑（tombstone）传播；包源码用 Git rebase 合并。
  * 冲突在交互模式弹窗选择，自动模式跳过并挂起。
  *
+ * 工作流（v1.5 起，无启动/退出自动同步）：
+ *   - 主力机改完配置/插件后主动 `/sync push`（或包装命令 `pi update --extensions`）推送。
+ *   - 其他机装过一次本机入口（/sync install-update）后，只需 `pi update --extensions`：
+ *     先完整同步（拉取→合并→落地→补装→卸载对账→推送），再调用真正的 pi 更新其余包。
+ *   - 开关 pi 本身零同步动作；不再注册 session_start / session_shutdown 钩子。
+ *
+ * 卸载对账（reconcileRemovedPackages）：pi 核心 `pi update --extensions` 只更新/补装清单内的包，
+ *   不卸载已移除的包；本扩展在落地后按 accepted/墓碑候选精确卸载（npm uninstall / 删干净 git 克隆），
+ *   使其他机仅跑更新命令即可完整对齐插件状态（含卸载）。
+ *
  * 命令：
  *   /sync                 一键同步：拉取 → 合并 → 推送（交互解决冲突）
  *   /sync init [repo] [--mode=remote|local]   初始化（新机器接入）
  *   /sync push | pull | status | on | off
+ *   /sync install-update  安装本机入口：让 `pi update --extensions` 先完整同步再更新
  *   /sync lan <ssh-host>  内网同步：配置仓库 + 所有 git 插件仓库推送到该主机
- *                         的 ~/pi-mirror 镜像（自动建仓/配 insteadOf），并记住
- *                         该主机，之后退出 pi 自动转发；/sync lan off 关闭
+ *                         的 ~/pi-mirror 镜像（自动建仓/配 insteadOf），并记住该主机；
+ *                         之后 `/sync lan`（不带参数）手动转发；/sync lan off 清空主机
  *
- * 自动同步（sync.autoSync，默认开）：session_start 后后台拉取合并；退出时若有本地改动则推送。
- * 配置包内未提交的源码修改也会自动 commit/push，不再需要手工维护另一份 Git 克隆。
+ * CLI（非交互，供包装脚本调用）：node extensions/pi-sync.ts --run（或 env PI_SYNC_CLI=1）。
+ *   复用 runSync 完整流程；ui=null，pending 冲突跳过，失败设 process.exitCode=1，绝不静默覆盖本机改动。
+ *   配置包内未提交的源码修改由 syncSelfSource 自动 commit/rebase/push。
  *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
- *               "enabled": true, "autoSync": true,
+ *               "enabled": true,
  *               "excludeKeys": [], "includeFiles": [],
- *               "lanHosts": ["v2x"] } }   // 内网镜像主机（ssh config 别名），退出时自动转发
+ *               "lanHosts": ["v2x"] } }   // 内网镜像主机（ssh config 别名），/sync lan 手动转发
+ *   autoSync 键仍被解析以兼容旧配置，但已无钩子消费它（开关 pi 不再触发同步）。
  *
  * 测试钩子：PI_SYNC_HOME 覆盖 ~/.pi，PI_SYNC_WORK 覆盖同步克隆目录。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // 常量与路径
@@ -626,8 +640,17 @@ async function commitIfDirty(message: string): Promise<boolean> {
 /**
  * 语义合并后创建真正的合并提交（把远端提交记为第二父提交）。
  * 即使内容无变化也必须建合并提交，否则双方历史永远分叉、push 永远 non-fast-forward。
+ *
+ * 非 config/ 的跟踪文件（包源码 extensions/、README、scripts 等）以远端 otherParent 为准：
+ * 工作克隆只负责 config/ 的三方合并，其索引中的源码是克隆时的旧版本；若直接 write-tree，
+ * 会把远端刚推送的源码更新覆盖回旧版（两克隆设计下源码被静默回退的根因）。
+ * 故先 read-tree 远端整树，再把本地合并好的 config/ 覆盖进索引 →
+ * merge 提交树 = 远端源码 + 合并后 config；reset --hard 同时把工作克隆源码刷新到远端最新。
+ * config/ 的合并结果仍完全来自 phase2（语义不变）。
  */
 async function commitMerge(otherParent: string, message: string): Promise<void> {
+  const rt = await git(["read-tree", otherParent]);
+  if (rt.code !== 0) return;
   await git(["add", "-A", "--", "config"]);
   const tree = await git(["write-tree"]);
   if (tree.code !== 0 || !tree.stdout.trim()) return;
@@ -1445,6 +1468,122 @@ async function materialize(prevLivePackages: unknown[], notes: string[], errors:
 }
 
 // ---------------------------------------------------------------------------
+// 卸载对账：pi 核心 update 只补装不卸载，这里按 accepted/墓碑候选精确移除已删包
+// ---------------------------------------------------------------------------
+
+/** 按候选相对路径在 ~/.pi/agent/git 下定位克隆目录（大小写不敏感，仅限该路径逐段 readdir，非广扫） */
+function resolveGitCloneDir(rel: string): string | null {
+  const base = path.join(agentDir(), "git");
+  if (!fs.existsSync(base)) return null;
+  let cur = base;
+  for (const seg of rel.split("/")) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(cur);
+    } catch {
+      return null;
+    }
+    const match = entries.find((e) => e === seg) ?? entries.find((e) => e.toLowerCase() === seg.toLowerCase());
+    if (!match) return null;
+    cur = path.join(cur, match);
+  }
+  try {
+    return fs.statSync(cur).isDirectory() ? cur : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 卸载对账（applyToLive 之后运行，手动 /sync pull 与 CLI 均受益）。
+ * 候选集 = accepted.packages 各机记账 id ∪ package 墓碑 id；凡不在合并后清单（归一化 packageId）
+ * 且本机安装目录存在者 → 卸载：npm 按名精确 uninstall；git 克隆干净才删目录，脏则跳过+警告。
+ * 目录已不存在的仅清 accepted 记账。只动候选，绝不碰清单内包或无关 npm 依赖。
+ * 清除某 id 的 accepted 时跨所有机器清（该包已从共享清单移除，防止 mergeStates 从旧状态反复复活记账）。
+ * 返回是否有状态变更（供调用方 commit）。
+ */
+export async function reconcileRemovedPackages(cfg: SyncConfig, notes: string[], errors: string[]): Promise<boolean> {
+  const stPath = path.join(workDir(), REPO_STATE);
+  const state = (readJson(stPath) as SyncState | null) ?? emptyState();
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const mergedIds = new Set(
+    (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => packageId(entrySource(e))),
+  );
+  const candidates = new Set<string>();
+  for (const bucket of Object.values(state.accepted?.packages ?? {})) {
+    for (const id of Object.keys(bucket)) candidates.add(id);
+  }
+  for (const t of state.tombstones) if (t.type === "package") candidates.add(t.id);
+
+  let changed = false;
+  const hadAccepted = (id: string): boolean =>
+    Object.values(state.accepted?.packages ?? {}).some((m) => m[id] !== undefined);
+  const clearAccepted = (id: string): void => {
+    const ap = state.accepted?.packages;
+    if (!ap) return;
+    for (const m of Object.keys(ap)) {
+      if (ap[m][id] !== undefined) {
+        delete ap[m][id];
+        changed = true;
+      }
+    }
+  };
+
+  for (const id of [...candidates].sort()) {
+    if (mergedIds.has(id)) continue; // 清单内包绝不卸载
+    if (id.startsWith("npm:")) {
+      const name = id.slice(4);
+      const dir = path.join(agentDir(), "npm", "node_modules", name);
+      if (fs.existsSync(dir)) {
+        const r = spawnSync("npm", ["uninstall", name, "--prefix", path.join(agentDir(), "npm")], {
+          shell: true,
+          timeout: INSTALL_TIMEOUT_MS,
+          encoding: "utf8",
+          env: process.env,
+        });
+        if (!r.error && r.status === 0) {
+          notes.push(`已卸载 ${id}`);
+          clearAccepted(id);
+          changed = true;
+        } else {
+          errors.push(`卸载失败 ${id}: ${String(r.stderr || r.stdout || r.error?.message || "").trim().slice(0, 120)}`);
+        }
+      } else if (hadAccepted(id)) {
+        clearAccepted(id);
+        notes.push(`清记账 ${id}（本机已无安装）`);
+      }
+    } else if (id.startsWith("git:")) {
+      const dir = resolveGitCloneDir(id.slice(4));
+      if (dir) {
+        const st = await run("git", ["status", "--porcelain"], { cwd: dir, timeout: 15_000, env: GIT_ENV() });
+        if (st.code !== 0) {
+          errors.push(`卸载跳过 ${id}：无法读取 git 状态`);
+          continue;
+        }
+        if (st.stdout.trim()) {
+          notes.push(`跳过卸载 ${id}（克隆有未提交改动）`);
+          continue;
+        }
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+          notes.push(`已卸载 ${id}（删除干净克隆）`);
+          clearAccepted(id);
+          changed = true;
+        } catch (e) {
+          errors.push(`删除克隆失败 ${id}: ${(e as Error).message}`);
+        }
+      } else if (hadAccepted(id)) {
+        clearAccepted(id);
+        notes.push(`清记账 ${id}（本机已无克隆）`);
+      }
+    }
+    // local: 或其他来源不自动卸载（无法安全判定安装目录）
+  }
+  if (changed) writeJson(stPath, state);
+  return changed;
+}
+
+// ---------------------------------------------------------------------------
 // 配置包自身源码：同步实际加载目录，不再依赖手工维护另一份 Git 克隆
 // ---------------------------------------------------------------------------
 
@@ -1481,6 +1620,18 @@ function selfSourceDir(cfg: SyncConfig): string | null {
     if (actual && packageId(actual) !== packageId(src) && packageId(actual) !== packageId(cfg.repo ?? "")) return null;
   }
   return fs.existsSync(path.join(dir, ".git")) && fs.existsSync(path.join(dir, "package.json")) ? dir : null;
+}
+
+/** 配置包 scripts 目录：优先按实际加载目录，回退到本扩展文件所在包的 scripts */
+function selfScriptsDir(cfg: SyncConfig): string | null {
+  const dir = selfSourceDir(cfg);
+  if (dir) return path.join(dir, "scripts");
+  try {
+    const extDir = path.dirname(fileURLToPath(import.meta.url));
+    return path.join(path.dirname(extDir), "scripts");
+  } catch {
+    return null;
+  }
 }
 
 function cpExecGitConfig(dir: string): string {
@@ -1520,7 +1671,7 @@ async function ensureSelfIdentity(dir: string): Promise<void> {
  * 文件是否存在由 Git 祖先关系判断：新机器从未拥有该文件不等于用户删除。
  * 真正的内容冲突保留 rebase 现场，不 reset、不强推、不静默覆盖。
  */
-async function syncSelfSource(cfg: SyncConfig, result: RunResult): Promise<void> {
+async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean): Promise<void> {
   const dir = selfSourceDir(cfg);
   if (!dir) return;
   const sourcePaths = selfSourcePaths(dir);
@@ -1789,6 +1940,10 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       await materialize(prevLivePackages, result.notes, result.errors);
     }
 
+    // 卸载对账：清单中已移除（accepted/墓碑候选）且本机仍安装的包 → 精确卸载
+    const reconciled = await reconcileRemovedPackages(cfg, result.notes, result.errors);
+    if (reconciled) await commitIfDirty(`pi-sync: reconcile removed packages (${cfg.machineId})`);
+
     // 推送
     if (opts.push) {
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -1817,7 +1972,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
 
     // 包源码必须最后同步：phase2/commitMerge 会对同一远端工作副本 reset --hard。
     // 若提前推送，旧工作副本会把刚合并的扩展再次覆盖（WorkBuddy 回退的根因）。
-    await syncSelfSource(cfg, result);
+    await syncSelfSource(cfg, result, opts.push);
 
     savePending(pending);
     result.conflictsPending = pending.size;
@@ -2164,41 +2319,8 @@ async function statusText(cfg: SyncConfig): Promise<string> {
     .join("；");
   if (machines) lines.push(`机器: ${machines}`);
   if (pending.size > 0) lines.push(`⚠️ ${pending.size} 项冲突待解决（运行 /sync）`);
-  lines.push(`自动同步: ${cfg.enabled && cfg.autoSync ? "开" : "关"}`);
+  lines.push(`同步开关: ${cfg.enabled ? "开" : "关"}（手动 /sync 或 pi update --extensions；开关 pi 不自动同步）`);
   return lines.join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// 自动同步
-// ---------------------------------------------------------------------------
-
-let autoRunning = false;
-
-async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promise<void> {
-  if (autoRunning) return;
-  autoRunning = true;
-  try {
-    const result = await runSync(ui, { push, interactive: false, materialize: true });
-    const interesting =
-      result.notes.length > 0 || result.errors.length > 0 || result.conflictsPending > 0;
-    if (!interesting || !ui) return;
-    if (result.errors.length > 0) {
-      ui.notify(`pi-sync（${reason}）：${result.errors[0]}`, "warning");
-      return;
-    }
-    const parts: string[] = [];
-    if (result.notes.length) parts.push(result.notes.slice(0, 6).join("；"));
-    if (result.conflictsPending) parts.push(`${result.conflictsPending} 项冲突待 /sync 处理`);
-    if (result.changedLocal) parts.push("配置已更新，/reload 后生效");
-    if (result.changedLocal) parts.push("配置/扩展已更新，重启 pi 后生效");
-    if (parts.length) ui.notify(`pi-sync：${parts.join("；")}`, "info");
-  } catch (e) {
-    try {
-      ui?.notify(`pi-sync（${reason}）失败: ${(e as Error).message}`, "warning");
-    } catch {}
-  } finally {
-    autoRunning = false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2208,7 +2330,7 @@ async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promis
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("sync", {
     description:
-      "多机配置同步：/sync [push|pull|status|on|off]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
+      "多机配置同步：/sync [push|pull|status|on|off|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
     handler: async (args, ctx) => {
       const ui: UiLike = ctx.ui;
       const [sub, ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
@@ -2261,10 +2383,24 @@ export default function (pi: ExtensionAPI) {
         const live = (readJson(liveP) ?? {}) as Side;
         const sync = ((live.sync as Side | undefined) ?? {}) as Side;
         sync.enabled = sub === "on";
-        if (sub === "on") sync.autoSync = true;
         live.sync = sync;
         writeJson(liveP, live);
-        ui.notify(`pi-sync 已${sub === "on" ? "开启（含自动同步）" : "关闭自动同步"}`, "info");
+        ui.notify(`pi-sync 已${sub === "on" ? "开启" : "关闭"}（由 /sync 或 pi update --extensions 手动触发；开关 pi 不再自动同步）`, "info");
+        return;
+      }
+
+      if (sub === "install-update") {
+        const scriptsDir = selfScriptsDir(cfg);
+        const script = scriptsDir ? path.join(scriptsDir, "pi-sync-cli.mjs") : null;
+        if (!script || !fs.existsSync(script)) {
+          ui.notify("找不到 scripts/pi-sync-cli.mjs（配置包未正确安装）", "error");
+          return;
+        }
+        ui.notify("pi-sync：安装本机更新入口（pi update --extensions 先完整同步）…", "info");
+        const r = await run(process.execPath, [script, "install"], { timeout: 60_000 });
+        const out = (r.stdout || "").trim().split("\n").filter(Boolean).slice(0, 3).join("；");
+        if (r.code === 0) ui.notify(`pi-sync install-update 完成${out ? "：" + out : ""}`, "info");
+        else ui.notify(`pi-sync install-update 失败：${(r.stderr || r.stdout).trim().slice(0, 160)}`, "error");
         return;
       }
 
@@ -2286,7 +2422,7 @@ export default function (pi: ExtensionAPI) {
           sync.lanHosts = [];
           live.sync = sync;
           writeJson(liveP, live);
-          ui.notify("pi-sync：已清空内网镜像主机，退出自动转发已关闭", "info");
+          ui.notify("pi-sync：已清空内网镜像主机（/sync lan 手动转发已无目标）", "info");
           return;
         }
         if (!cfg.repo) {
@@ -2303,11 +2439,11 @@ export default function (pi: ExtensionAPI) {
             sync.lanHosts = [...cfg.lanHosts, target];
             live.sync = sync;
             writeJson(liveP, live);
-            ui.notify(`pi-sync：已记住内网主机 ${target}，以后退出 pi 会自动转发内网镜像`, "info");
+            ui.notify(`pi-sync：已记住内网主机 ${target}，之后 /sync lan（不带参数）即手动转发内网镜像`, "info");
           }
         }
         if (!hosts.length) {
-          ui.notify("用法: /sync lan <ssh主机>（~/.ssh/config 里的 Host 别名，如 v2x）；/sync lan off 关闭自动转发", "warning");
+          ui.notify("用法: /sync lan <ssh主机>（~/.ssh/config 里的 Host 别名，如 v2x）；/sync lan off 清空主机", "warning");
           return;
         }
         ui.notify(`pi-sync：同步中，完成后转发内网镜像（${hosts.join(", ")}）…`, "info");
@@ -2339,31 +2475,51 @@ export default function (pi: ExtensionAPI) {
       }
 
       ui.notify(
-        "用法: /sync [push|pull|status|on|off]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
+        "用法: /sync [push|pull|status|on|off|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
         "warning",
       );
     },
   });
 
-  pi.on("session_start", async (event, ctx) => {
-    if (event.reason !== "startup") return;
-    const cfg = loadConfig();
-    if (!cfg.enabled || !cfg.autoSync || !cfg.repo) return;
-    const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
-    // 后台执行，不阻塞启动
-    void autoRun(ui, "启动同步", true);
-  });
-
-  pi.on("session_shutdown", async (event, ctx) => {
-    if (event.reason !== "quit") return;
-    const cfg = loadConfig();
-    if (!cfg.enabled || !cfg.autoSync || !cfg.repo) return;
-    if (!fs.existsSync(path.join(workDir(), ".git"))) return;
-    const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
-    await Promise.race([autoRun(ui, "退出同步", true), new Promise((r) => setTimeout(r, 20_000))]);
-    // 内网镜像：退出时顺手把最新状态转发到各内网机（不可达则静默跳过）
-    if (cfg.lanHosts.length) {
-      await Promise.race([lanPush(null, cfg.lanHosts, { quiet: true }), new Promise((r) => setTimeout(r, 90_000))]);
-    }
-  });
 }
+
+// ---------------------------------------------------------------------------
+// CLI 直接执行入口（node extensions/pi-sync.ts --run，或 env PI_SYNC_CLI=1）
+// 仅当本文件是入口脚本时触发；被 pi 作为扩展 import 时不运行、不注册钩子。
+// 复用 runSync 完整流程（phase1→commit→fetch→phase2→applyToLive→物化→卸载对账→push→包源码）。
+// ---------------------------------------------------------------------------
+
+async function cliMain(): Promise<void> {
+  const log = (msg: string): void => console.log(`[pi-sync] ${msg}`);
+  const cfg = loadConfig();
+  if (!cfg.enabled) {
+    log("sync.enabled=false，跳过同步");
+    return;
+  }
+  if (!cfg.repo) {
+    console.error("[pi-sync] 未配置同步仓库，请先在 pi 内运行 /sync init");
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const result = await runSync(null, { push: true, interactive: false, materialize: true });
+    for (const n of result.notes) log(n);
+    if (result.conflictsResolved) log(`解决了 ${result.conflictsResolved} 项冲突`);
+    if (result.conflictsPending) log(`⚠️ ${result.conflictsPending} 项冲突非交互跳过（本机改动保留，需在 pi 内 /sync 解决）`);
+    if (result.errors.length) {
+      for (const e of result.errors) console.error(`[pi-sync] 错误: ${e}`);
+      process.exitCode = 1;
+      return;
+    }
+    log(result.pushed ? "同步完成，已推送" : "同步完成（无需推送）");
+  } catch (e) {
+    console.error(`[pi-sync] 同步失败: ${(e as Error).message}`);
+    process.exitCode = 1;
+  }
+}
+
+const invokedDirectly =
+  typeof process.argv[1] === "string" &&
+  path.basename(process.argv[1]) === "pi-sync.ts" &&
+  (process.argv.includes("--run") || process.env.PI_SYNC_CLI === "1");
+if (invokedDirectly) void cliMain();
