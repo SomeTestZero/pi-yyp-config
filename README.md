@@ -22,8 +22,10 @@ pi          # 启动后执行：
 ### 日常：零操作
 
 - **启动 pi** → 自动拉取并合并其他机器的改动（通知栏给摘要）
-- **改了配置、装/删了插件** → **退出 pi 时自动推送**
-- 两机改了同一配置键 → 下次手动 `/sync` 时弹窗选择保留哪边
+- **改了配置、装/删了插件、修改本包扩展源码** → **退出 pi 时自动提交并推送**
+- **其他机器 `/sync`** → 配置和实际加载的包源码一起更新，重启 pi 后生效
+- 两机改了同一配置键 → 下次手动 `/sync` 时弹窗选择保留哪边；同一源码文件的 Git 冲突会明确提示，不静默覆盖
+- `/sync status` 查看配置包实际目录、未提交源码和远端差异
 
 ### 命令
 
@@ -59,7 +61,7 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 
 | 内容 | 位置 | 方式 |
 | --- | --- | --- |
-| 包资源（extensions/skills/prompts/themes） | 仓库根目录各目录 | pi 包机制（`pi update --extensions`） |
+| 包资源（extensions/skills/prompts/themes/docs/scripts） | 实际安装目录 ↔ 仓库根目录各目录 | `/sync` 自动提交、rebase、推送；同时兼容无 `.git` 后缀安装目录 |
 | 全局设置 | `~/.pi/agent/settings.json` ↔ `config/pi/agent/settings.json` | pi-sync 扩展（顶层键级三方合并） |
 | 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装 |
 | 键位绑定 | `keybindings.json` | pi-sync 扩展 |
