@@ -14,6 +14,8 @@
  * 账号风险自担。官方合规路径是 Coding Plan / Token Plan 的 API Key。
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CreditLedger, creditDelta } from "./workbuddy-credits.ts";
 import {
 	createAssistantMessageEventStream,
 	openAICompletionsApi,
@@ -320,6 +322,8 @@ export interface QueueStreamOptions {
 	makeStream: () => AssistantMessageEventStream;
 	/** 流都没开成时（同步抛错）拿来当错误载体，免得 result() 拿到 undefined。 */
 	fallback: () => AssistantMessage;
+	/** 只在成功 done 时记一次；排队失败与重试不计费。 */
+	onDone?: () => void;
 	onStatus?: (text: string | undefined) => void;
 	maxWaitMs?: number;
 	pollMs?: number;
@@ -383,6 +387,7 @@ export function streamQueueAware(opts: QueueStreamOptions): AssistantMessageEven
 					}
 					out.push(event);
 					if (event.type === "done") {
+						opts.onDone?.();
 						opts.onStatus?.(undefined);
 						out.end();
 						return;
@@ -660,16 +665,16 @@ function isChatModel(model: WbModel): boolean {
 }
 
 let uiContext: any;
-const sessionCredits = new Map<WorkBuddySite["id"], number>();
+let creditLedger: CreditLedger | undefined;
 
 function renderCredits(site: WorkBuddySite): void {
-	const credits = sessionCredits.get(site.id) ?? 0;
+	const credits = creditLedger?.read()[site.id] ?? 0;
 	const suffix = site.id === "workbuddy-intl" ? "Intl" : "CN";
 	uiContext?.ui.setStatus(site.id, credits > 0 ? `WorkBuddy ${suffix} ${credits.toFixed(2)} cr` : undefined);
 }
 
 function noteCredit(site: WorkBuddySite, credit: number): void {
-	sessionCredits.set(site.id, (sessionCredits.get(site.id) ?? 0) + credit);
+	creditLedger?.add(site.id, credit);
 	renderCredits(site);
 }
 
@@ -687,21 +692,19 @@ function streamSimple(
 		headers: { ...(model.headers ?? {}), ...chatHeaders(site, token) },
 	};
 
-	const makeStream = () =>
-		openAICompletionsApi().streamSimple(outbound, context, {
+	const makeStream = () => {
+		let credit: number | undefined;
+		return openAICompletionsApi().streamSimple(outbound, context, {
 			...options,
 			onProviderStreamEvent: async (data, eventModel) => {
-				// usage.credit 是本次请求消耗的积分（上游最终 chunk 里给）。
-				const usage = (data as { usage?: { credit?: unknown } } | undefined)?.usage;
-				if (usage && typeof usage.credit === "number" && usage.credit > 0) {
-					if (process.env.PI_WB_DEBUG) console.error("[wb] credit", usage.credit);
-					noteCredit(site, usage.credit);
-				}
+				// 同一响应可重复携带 usage 快照，只在 done 时记一次，不能逐 chunk 累加。
+				credit = creditDelta(data) ?? credit;
 				await options?.onProviderStreamEvent?.(data, eventModel);
 			},
 		});
+	};
 
-	return streamQueueAware({
+	const base = streamQueueAware({
 		site,
 		token,
 		model: model.id,
@@ -727,13 +730,43 @@ function streamSimple(
 		// 站点各自使用独立状态栏 key，避免国内/国际的排队提示互相覆盖。
 		onStatus: (text) => uiContext?.ui.setStatus(`${site.id}-queue`, text),
 	});
+
+	// 通用 lazy stream 不提供 tap；这里仅观察最终事件，不拦截内容。
+	const out = createAssistantMessageEventStream();
+	void (async () => {
+		try {
+			let response: AssistantMessage | undefined;
+			for await (const event of base) {
+				out.push(event);
+				if (event.type === "done") {
+					response = event.message;
+					if (credit !== undefined) {
+						if (process.env.PI_WB_DEBUG) console.error("[wb] credit", credit);
+						noteCredit(site, credit);
+					}
+				} else if (event.type === "error") response = event.error;
+			}
+			out.end(response);
+		} catch (error) {
+			out.end(error instanceof Error ? error : new Error(String(error)));
+		}
+	})();
+	return out;
 }
 
 export default function workbuddyExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		uiContext = ctx;
-		sessionCredits.clear();
+		// 子 Pi 继承同一个 run 目录；resume 不继承，防止把旧会话积分重复计入。
+		creditLedger = new CreditLedger(ctx.sessionManager.getSessionFile(), ctx.cwd, getAgentDir(), process.env.PI_WB_CREDITS_DIR);
+		process.env.PI_WB_CREDITS_DIR = creditLedger.dir;
 		for (const site of Object.values(SITES)) renderCredits(site);
+	});
+
+	pi.on("session_shutdown", async () => {
+		await creditLedger?.close();
+		creditLedger = undefined;
+		delete process.env.PI_WB_CREDITS_DIR;
 	});
 
 	pi.registerCommand("wb", {
@@ -762,7 +795,7 @@ export default function workbuddyExtension(pi: ExtensionAPI) {
 				const output = `${Math.round(model.maxTokens / 1000)}K`;
 				return `${model.name}  · ctx ${context} / out ${output}`;
 			});
-			const credits = sessionCredits.get(site.id) ?? 0;
+			const credits = creditLedger?.read()[site.id] ?? 0;
 			await ctx.ui.select(`${site.name} · 本次已用 ${credits.toFixed(2)} credits`, lines);
 		},
 	});

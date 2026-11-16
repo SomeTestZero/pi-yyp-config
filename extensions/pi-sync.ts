@@ -35,6 +35,7 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------------------
 // 常量与路径
@@ -1552,7 +1553,7 @@ async function syncSelfSource(cfg: SyncConfig, result: RunResult): Promise<void>
   if (upstreamStatus.code !== 0) await selfGit(dir, ["branch", "--set-upstream-to", "origin/main"]);
   const fetch = await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
   if (fetch.code !== 0) {
-    if (push) result.errors.push("配置包源码拉取失败，请联网后运行 /sync push");
+    result.errors.push("配置包源码拉取失败，请联网后运行 /sync push");
     return;
   }
   const branch = (await selfGit(dir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim() || "main";
@@ -1598,21 +1599,36 @@ async function syncSelfSource(cfg: SyncConfig, result: RunResult): Promise<void>
 
 function acquireLock(): boolean {
   try {
-  	const p = lockPath();
+    const p = lockPath();
     if (fs.existsSync(p)) {
-      const raw = readJson(p) as { ts?: number } | null;
-      if (raw?.ts && Date.now() - raw.ts < LOCK_MAX_AGE_MS) return false;
+      const raw = readJson(p) as { ts?: number; pid?: number } | null;
+      let alive = false;
+      if (typeof raw?.pid === "number" && raw.pid > 0) {
+        try { process.kill(raw.pid, 0); alive = true; }
+        catch (error) { alive = (error as NodeJS.ErrnoException).code === "EPERM"; }
+      }
+      if (alive && raw?.ts && Date.now() - raw.ts < LOCK_MAX_AGE_MS) return false;
     }
     writeJson(p, { pid: process.pid, ts: Date.now() });
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
+}
+
+let lockHeartbeat: ReturnType<typeof setInterval> | undefined;
+function startLockHeartbeat(): void {
+  lockHeartbeat = setInterval(() => {
+    const raw = readJson(lockPath()) as { pid?: number } | null;
+    if (raw?.pid === process.pid) writeJson(lockPath(), { pid: process.pid, ts: Date.now() });
+  }, 30_000);
+  lockHeartbeat.unref();
 }
 
 function releaseLock(): void {
+  if (lockHeartbeat) clearInterval(lockHeartbeat);
+  lockHeartbeat = undefined;
   try {
-    fs.unlinkSync(lockPath());
+    const raw = readJson(lockPath()) as { pid?: number } | null;
+    if (raw?.pid === process.pid) fs.unlinkSync(lockPath());
   } catch {}
 }
 
@@ -1639,6 +1655,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.errors.push("另一个同步正在进行中，已跳过");
     return result;
   }
+  startLockHeartbeat();
   try {
     const cloneErr = await ensureClone(cfg);
     if (cloneErr) {
@@ -2155,6 +2172,28 @@ async function statusText(cfg: SyncConfig): Promise<string> {
 
 
 // ---------------------------------------------------------------------------
+// 独立 CLI：只在直接执行本文件时运行，pi import 扩展时绝不触发
+// ---------------------------------------------------------------------------
+
+async function cliMain(args: string[]): Promise<void> {
+  if (args[0] !== "--run") throw new Error("pi-sync CLI 仅支持 --run");
+  const result = await runSync(null, { push: true, interactive: false, materialize: true });
+  for (const note of result.notes) console.log(`pi-sync: ${note}`);
+  for (const error of result.errors) console.error(`pi-sync: ${error}`);
+  if (result.conflictsPending) console.error(`pi-sync: ${result.conflictsPending} 项配置冲突待处理；请在 pi 内运行 /sync`);
+  if (!result.ok || result.conflictsPending) process.exitCode = 1;
+  else console.log("pi-sync: 配置与包源码已同步，继续更新其他扩展包…");
+}
+
+const isStandaloneCli = process.argv[1] !== undefined && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isStandaloneCli) {
+  await cliMain(process.argv.slice(2)).catch((error) => {
+    console.error(`pi-sync: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // 扩展入口
 // ---------------------------------------------------------------------------
 
@@ -2206,6 +2245,19 @@ export default function (pi: ExtensionAPI) {
         const extra = result.changedLocal ? "；配置已就位，建议 /reload" : "";
         if (result.errors.length) ui.notify(`pi-sync init 完成但有警告：${result.errors.join("；")}`, "warning");
         else ui.notify(`pi-sync init 完成${extra}`, "info");
+        return;
+      }
+
+      if (sub === "install-update") {
+        const modulePath = fileURLToPath(import.meta.url);
+        const cliPath = path.join(path.dirname(path.dirname(modulePath)), "scripts", "pi-sync-cli.mjs");
+        if (!fs.existsSync(cliPath)) {
+          ui.notify(`找不到更新入口安装器：${cliPath}；请先 pi update --extensions`, "error");
+          return;
+        }
+        const installed = await run(process.execPath, [cliPath, "install"], { timeout: 60_000 });
+        if (installed.code === 0) ui.notify("安装完成；新开终端后，pi update --extensions 会先完整同步再更新扩展", "info");
+        else ui.notify(`安装失败：${installed.stderr.trim().slice(0, 180)}`, "error");
         return;
       }
 
