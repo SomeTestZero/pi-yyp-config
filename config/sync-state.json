@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-16T09:30:35.963Z"
+      "lastSeen": "2026-11-16T09:45:49.386Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:39:09.168Z"
@@ -81,10 +81,6 @@
     },
     "npm:pi-subagent-feather": {
       "ts": 1791895452271,
-      "machine": "yyp-home-pc"
-    },
-    "npm:pi-antigravity": {
-      "ts": 1794385597516,
       "machine": "yyp-home-pc"
     },
     "git:github.com/sometestzero/pi-agents-md-tracker": {
@@ -195,6 +191,12 @@
       "type": "file",
       "id": "config/pi/agent/models.json",
       "ts": 1793599613499,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-antigravity",
+      "ts": 1794822349380,
       "machine": "yyp-home-pc"
     }
   ],
