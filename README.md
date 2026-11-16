@@ -68,6 +68,17 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
 
+## WorkBuddy 模型（CN / Intl 双 Provider）
+
+`extensions/workbuddy.ts` 把 WorkBuddy 订阅接成 pi 原生 provider，不需要 WorkBuddy 桌面端、不再跑本地反代：
+
+- `/login workbuddy-cn` → 登录 **WorkBuddy CN（国内版）**；`/login workbuddy-intl` → 登录 **WorkBuddy Intl（国际版）**。浏览器完成官方插件 OAuth 授权，两站凭据互相隔离。每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
+- `/model` 中分别显示 `workbuddy-cn/...`（CN）与 `workbuddy-intl/...`（Intl），底部模型栏同步显示对应 Provider。
+- 模型目录直接读上游 `/v2/enterprises/personal/models`：上下文窗口、最大输出、思考档位都以它为准；模型名后的 `(0.69x)` 是积分倍率。
+- `/thinking` 控制 `reasoning_effort`（按模型支持的档位映射）；两站本次会话已用积分分别显示在 footer（`WorkBuddy CN / Intl 1.23 cr`）。
+- `/wb`、`/wb intl` 查看对应站点模型与积分；`/wb refresh`、`/wb intl refresh` 强制刷新对应模型目录。
+- 非官方客户端，属灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品），账号风险自担；合规路径是 Coding Plan / Token Plan 的 API Key。
+
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
 
