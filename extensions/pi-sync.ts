@@ -1639,6 +1639,8 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.errors.push("另一个同步正在进行中，已跳过");
     return result;
   }
+  startLockHeartbeat();
+  const pending = loadPending();
   try {
     const cloneErr = await ensureClone(cfg);
     if (cloneErr) {
@@ -1649,7 +1651,6 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     await syncSelfSource(cfg, result);
     if (result.errors.length > 0) return result;
 
-    const pending = loadPending();
     const prevLive = (readJson(liveSettingsPath()) ?? {}) as Side;
     const prevLivePackages = Array.isArray(prevLive.packages) ? (prevLive.packages as unknown[]) : [];
 
