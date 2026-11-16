@@ -1598,21 +1598,39 @@ async function syncSelfSource(cfg: SyncConfig, result: RunResult): Promise<void>
 
 function acquireLock(): boolean {
   try {
-  	const p = lockPath();
+    const p = lockPath();
     if (fs.existsSync(p)) {
-      const raw = readJson(p) as { ts?: number } | null;
-      if (raw?.ts && Date.now() - raw.ts < LOCK_MAX_AGE_MS) return false;
+      const raw = readJson(p) as { ts?: number; pid?: number } | null;
+      // 只看 ts 会把崩溃进程留下的锁当成“正在同步”，直到 LOCK_MAX_AGE_MS 过期；先确认持有者是否还活着。
+      let alive = false;
+      if (typeof raw?.pid === "number" && raw.pid > 0) {
+        try { process.kill(raw.pid, 0); alive = true; }
+        catch (error) { alive = (error as NodeJS.ErrnoException).code === "EPERM"; }
+      }
+      if (alive && raw?.ts && Date.now() - raw.ts < LOCK_MAX_AGE_MS) return false;
     }
     writeJson(p, { pid: process.pid, ts: Date.now() });
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
+}
+
+// 慢网络下的 fetch/rebase/push 会超过 LOCK_MAX_AGE_MS，心跳让锁在持有者存活期间保持新鲜。
+let lockHeartbeat: ReturnType<typeof setInterval> | undefined;
+function startLockHeartbeat(): void {
+  lockHeartbeat = setInterval(() => {
+    const raw = readJson(lockPath()) as { pid?: number } | null;
+    if (raw?.pid === process.pid) writeJson(lockPath(), { pid: process.pid, ts: Date.now() });
+  }, 30_000);
+  lockHeartbeat.unref();
 }
 
 function releaseLock(): void {
+  if (lockHeartbeat) clearInterval(lockHeartbeat);
+  lockHeartbeat = undefined;
   try {
-    fs.unlinkSync(lockPath());
+    // 只删自己的锁：超时后别的进程可能已经接手。
+    const raw = readJson(lockPath()) as { pid?: number } | null;
+    if (raw?.pid === process.pid) fs.unlinkSync(lockPath());
   } catch {}
 }
 
