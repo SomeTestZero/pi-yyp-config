@@ -46,8 +46,9 @@
     "defaultModel"
   ],
   "extensionChangelogVersions": {
-    "{\"source\":\"git:git@github.com:SomeTestZero/pi-ask-user-question.git\",\"scope\":\"user\"}": "2.12.1",
-    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0",
-    "{\"source\":\"npm:@narumitw/pi-btw\",\"scope\":\"user\"}": "0.63.5"
+    "{\"source\":\"git:github.com/SomeTestZero/pi-ask-user-question\",\"scope\":\"user\"}": "2.12.1",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.48.0",
+    "{\"source\":\"npm:@narumitw/pi-btw\",\"scope\":\"user\"}": "0.63.8",
+    "{\"source\":\"git:git@github.com:SomeTestZero/pi-ask-user-question.git\",\"scope\":\"user\"}": "2.12.1"
   }
 }
