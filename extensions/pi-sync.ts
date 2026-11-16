@@ -789,6 +789,15 @@ export function mergeSettingsKeys(opts: {
       state.settings[k] = state.settings[k] ?? remoteMeta[k] ?? { ts: now, machine };
       continue; // 收敛
     }
+    if (k === "extensionChangelogVersions" && hasL && hasR) {
+      const merged = mergeChangelogVersions(l, r);
+      if (merged) {
+        tree[k] = merged;
+        state.settings[k] = { ts: now, machine };
+        notes.push(`~${k}（合并各来源的已读版本）`);
+        continue;
+      }
+    }
     if (!hasL && !hasR) continue; // 双方都删了
     if (!hasL && hasR) {
       // 本机删除 vs 远端修改：按时间戳
@@ -1520,7 +1529,7 @@ async function ensureSelfIdentity(dir: string): Promise<void> {
  * 文件是否存在由 Git 祖先关系判断：新机器从未拥有该文件不等于用户删除。
  * 真正的内容冲突保留 rebase 现场，不 reset、不强推、不静默覆盖。
  */
-async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean): Promise<void> {
+async function syncSelfSource(cfg: SyncConfig, result: RunResult): Promise<void> {
   const dir = selfSourceDir(cfg);
   if (!dir) return;
   const sourcePaths = selfSourcePaths(dir);
@@ -1570,7 +1579,6 @@ async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean)
     result.changedLocal = true;
   }
 
-  if (!push) return;
   const outgoing = parseInt((await selfGit(dir, ["rev-list", "--count", `${upstream}..HEAD`])).stdout.trim(), 10) || 0;
   if (outgoing === 0) return;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -1647,7 +1655,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       return result;
     }
     // 源码先完成 rebase + push：后续配置合并的 reset --hard 不会丢掉它。
-    await syncSelfSource(cfg, result, opts.push);
+    await syncSelfSource(cfg, result);
     if (result.errors.length > 0) return result;
 
     const pending = loadPending();
@@ -1806,6 +1814,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.ok = result.errors.length === 0;
     return result;
   } finally {
+    savePending(pending);
     releaseLock();
   }
 }

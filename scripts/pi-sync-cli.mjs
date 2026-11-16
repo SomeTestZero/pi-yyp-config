@@ -93,7 +93,7 @@ function psQuote(value) {
 }
 
 async function installWindows(corePath) {
-  const npmRoot = spawnSync("npm", ["prefix", "-g"], { encoding: "utf8", shell: true }).stdout.trim();
+  const npmRoot = spawnSync("npm", ["prefix", "-g"], { encoding: "utf8", shell: false }).stdout.trim();
   if (!npmRoot) throw new Error("无法确定 npm 全局目录");
   const realCmd = join(npmRoot, "pi.cmd");
   if (!existsSync(realCmd)) throw new Error(`找不到真实 pi：${realCmd}`);
