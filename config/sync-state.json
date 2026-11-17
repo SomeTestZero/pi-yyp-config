@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-13T06:36:37.496Z"
+      "lastSeen": "2026-11-16T10:57:13.627Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-17T10:52:46.950Z"
@@ -14,7 +14,7 @@
       "lastSeen": "2026-09-15T05:10:27.134Z"
     },
     "yypmini": {
-      "lastSeen": "2026-11-06T01:47:46.416Z"
+      "lastSeen": "2026-11-16T02:20:26.388Z"
     },
     "gxyusproecs9KHS2dK4tz": {
       "lastSeen": "2026-11-10T07:09:39.103Z"
@@ -42,8 +42,8 @@
       "machine": "yyp-home-pc"
     },
     "extensionChangelogVersions": {
-      "ts": 1794457250044,
-      "machine": "yyp-home-pc"
+      "ts": 1794794724968,
+      "machine": "yypmini"
     }
   },
   "packages": {
@@ -81,10 +81,6 @@
     },
     "npm:pi-subagent-feather": {
       "ts": 1791895452271,
-      "machine": "yyp-home-pc"
-    },
-    "npm:pi-antigravity": {
-      "ts": 1794385597516,
       "machine": "yyp-home-pc"
     },
     "git:github.com/sometestzero/pi-agents-md-tracker": {
@@ -126,8 +122,8 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/models.json": {
-      "ts": 1793603404642,
-      "machine": "NEU-20230908KJS"
+      "ts": 1794814316414,
+      "machine": "yyp-home-pc"
     }
   },
   "tombstones": [
@@ -180,9 +176,21 @@
       "machine": "yyp-home-pc"
     },
     {
-      "type": "file",
-      "id": "config/pi/agent/models.json",
-      "ts": 1793599613499,
+      "type": "package",
+      "id": "npm:pi-codebuddy-sdk",
+      "ts": 1794631014470,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-codebuddy-oauth",
+      "ts": 1794640955284,
+      "machine": "yyp-home-pc"
+    },
+    {
+      "type": "package",
+      "id": "npm:pi-antigravity",
+      "ts": 1794822349380,
       "machine": "yyp-home-pc"
     }
   ],
