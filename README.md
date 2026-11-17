@@ -50,9 +50,14 @@ pi update --extensions
 | `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
 | `/sync push` / `/sync pull` | 单向操作 |
 | `/sync on` / `/sync off` | 开关本机同步（enabled）；同步仅由 /sync 或 pi update --extensions 手动触发 |
-| `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步（含卸载对账）再更新其他包 |
+| `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步（含卸载对账）再更新其他包；不销毁 pi 自带启动器（会先备份成 `~/.pi/agent/bin/pi.pi-real`） |
 | `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后 `/sync lan`（不带参数）手动转发 |
 | `/sync lan off` | 清空内网镜像主机 |
+
+### 更新入口与插件远端（2026-11-17 修复）
+
+- **pi 启动卡死**：pi 的托管安装自己会在 `~/.pi/agent/bin/pi` 放「跟随 `install/current-version`」的启动器，并把 `~/.local/bin/pi` 软链到它。旧版安装器覆盖该启动器后，又从 `which -a pi` 里挑中「软链回包装」的 `~/.local/bin/pi` 当真实 pi → 包装 `exec` 自己，启动 pi 即 100% CPU 死循环。现在安装器按 realpath 排除包装自身与指向包装的软链、备份 pi 启动器、用 `--version` 冒烟测试后才落盘，包装运行时也带自递归保护与多级回退。修好后重跑 `/sync install-update` 即可。
+- **`pi update --extensions` 里 https 插件拉不动**：pi 更新已装 git 插件时直接在旧克隆里 `git fetch origin`，早期用 `git:github.com/...`（无 scheme，pi 解析成 https）装的包远端会一直是 `https://github.com/...`。现在每次同步前自动把 `~/.pi/agent/git/**` 里 GitHub 的 https 远端改成 `git@github.com:...`（可单独执行 `node scripts/pi-sync-cli.mjs fix-remotes`，临时关闭用 `PI_SYNC_SKIP_REMOTE_FIX=1`）。
 
 ## 内网机器（无外网）
 
