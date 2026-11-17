@@ -19,11 +19,28 @@ pi          # 启动后执行：
 
 `--mode=remote` 表示以远端为准（推荐新机器）；在配置最全的主力机上首次建仓用 `--mode=local`。
 
-### 日常：零操作
+### 日常：一条更新命令
 
-- **启动 pi** → 自动拉取并合并其他机器的改动（通知栏给摘要）
-- **改了配置、装/删了插件** → **退出 pi 时自动推送**
-- 两机改了同一配置键 → 下次手动 `/sync` 时弹窗选择保留哪边
+每台机器安装一次本机入口（不修改 pi 自身安装文件）：
+
+```bash
+# 在 pi 会话内执行
+/sync install-update
+```
+
+新开终端后只需：
+
+```bash
+pi update --extensions
+```
+
+它会先完整同步配置、实际加载的包源码和本地扩展，**并卸载清单中已移除的包**（pi 核心更新只补装不卸载，卸载对账由 pi-sync 完成），再调用真正的 pi 更新其他包。同步失败或源码冲突时停止更新，不静默覆盖本机改动。更新完成后重启 pi。
+
+- **主力机改完配置/插件** → 主动 `/sync push`（或 `pi update --extensions`）推送；开关 pi 本身不再触发任何同步
+- **其他机对齐** → 装过一次 `/sync install-update` 后，只跑 `pi update --extensions` 即完整同步 + 卸载对账 + 更新
+- **两机改了同一配置键** → 下次 `/sync` 弹窗选择；非交互（CLI/包装）下冲突挂起跳过、保留本机改动，源码 Git 冲突会明确提示并停止
+- **`/sync status`** → 查看配置包实际目录、未提交源码和远端差异
+- **不想包装命令时** → 仍可直接 `/sync`；它提供交互式冲突处理
 
 ### 命令
 
@@ -32,9 +49,10 @@ pi          # 启动后执行：
 | `/sync` | 一键同步：拉取 → 合并 → 推送（交互解决冲突） |
 | `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
 | `/sync push` / `/sync pull` | 单向操作 |
-| `/sync on` / `/sync off` | 开关本机的自动同步 |
-| `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后退出 pi 自动转发 |
-| `/sync lan off` | 清空内网镜像主机，关闭退出自动转发 |
+| `/sync on` / `/sync off` | 开关本机同步（enabled）；同步仅由 /sync 或 pi update --extensions 手动触发 |
+| `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步（含卸载对账）再更新其他包 |
+| `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后 `/sync lan`（不带参数）手动转发 |
+| `/sync lan off` | 清空内网镜像主机 |
 
 ## 内网机器（无外网）
 
@@ -50,23 +68,45 @@ pi install git:git@github.com:SomeTestZero/pi-yyp-config   # 会被 insteadOf �
 # settings.json 设（sync 键本机有效，不参与同步）：
 #   "sync": { "repo": "/home/<用户>/pi-mirror/pi-yyp-config.git",
 #             "excludeKeys": ["defaultProvider","defaultModel"] }
-pi                        # 启动即自动拉取合并，补齐全部插件/配置
+pi                        # 启动后 /sync（或 pi update --extensions）拉取合并，补齐全部插件/配置
 ```
 
-注意：`npm:` 来源的包无法离线安装，把主力机 `~/.pi/agent/npm/` 整目录拷到内网机同路径即可；`auth.json` 按设计永不同步，内网机用 `/infcode-connect` 共享主力机登录态。主力机不在内网时退出转发自动静默跳过。
+注意：`npm:` 来源的包无法离线安装，把主力机 `~/.pi/agent/npm/` 整目录拷到内网机同路径即可；`auth.json` 按设计永不同步，内网机用 `/infcode-connect` 共享主力机登录态。主力机不在内网时 `/sync lan` 转发自动静默跳过。
 
 ## 同步范围
 
 | 内容 | 位置 | 方式 |
 | --- | --- | --- |
-| 包资源（extensions/skills/prompts/themes） | 仓库根目录各目录 | pi 包机制（`pi update --extensions`） |
+| 包资源（extensions/skills/prompts/themes/docs/scripts） | 实际安装目录 ↔ 仓库根目录各目录 | `/sync` 自动提交、rebase、推送；同时兼容无 `.git` 后缀安装目录 |
 | 全局设置 | `~/.pi/agent/settings.json` ↔ `config/pi/agent/settings.json` | pi-sync 扩展（顶层键级三方合并） |
-| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装 |
+| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装，并按 accepted/墓碑候选卸载已移除的包 |
 | 键位绑定 | `keybindings.json` | pi-sync 扩展 |
 | 模型配置 | `~/.pi/agent/models.json` ↔ `config/pi/agent/models.json` | pi-sync 扩展（整文件三方合并） |
 | 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
 
 **合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
+
+## 请求体防爆（image-budget）
+
+10-21 起随仓库分发 `config/pi/agent/extensions/image-budget.ts`：在 `context` 事件里给**每轮请求的图片**设硬上限（历史窗口 4 张 + 24MB 预算，最近读的图优先保留），根治 DeepSeek 的 `413 Request Entity Too Large` / `550`。配套 `config/pi/agent/models.json` 把单图编码压到 `1600px / 1.5MB / q82`，一张 12MB 的 4096 PNG 读进会话只存 0.22MB。
+
+- 自查：`/imgbudget`；调试：`PI_IMAGE_BUDGET_DEBUG=1`；关闭：`PI_IMAGE_BUDGET_OFF=1`
+- 根因、实测边界（45.3MB 通 / 49.3MB 挂 / 官方 48 MiB）、DeepSeek 视觉侧限制（约 1300×1300 网格、1024 token/图）与验证记录 → **[docs/image-budget.md](docs/image-budget.md)**
+
+## WorkBuddy 模型（CN / Intl 双 Provider）
+
+`extensions/workbuddy.ts` 把 WorkBuddy 订阅接成 pi 原生 provider，不需要 WorkBuddy 桌面端、不再跑本地反代：
+
+- `/login workbuddy-cn` → 登录 **WorkBuddy CN（国内版）**；`/login workbuddy-intl` → 登录 **WorkBuddy Intl（国际版）**。两站 OAuth 凭据互相隔离，每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
+- `/model` 分别显示 `workbuddy-cn/...`、`workbuddy-intl/...`；目录直接读上游 `/v2/enterprises/personal/models`，模型名后的 `(0.69x)` 是积分倍率。
+- `/thinking` 控制 `reasoning_effort`；footer 按站点显示本次会话已用积分（`WorkBuddy CN / Intl 1.23 cr`）。`/wb`、`/wb intl` 查看模型与积分；加 `refresh` 强制刷新目录。
+- **积分包含主代理和所有子代理**：真实 `usage.credit` 按请求成功结束时计一次，重复 usage 不重复累计；主子进程通过本地小文件账本共享，支持并行、递归、超时后 resume，CN/Intl 分开。账本只存积分，不存请求、回答或凭据，位于会话目录 `.workbuddy-credits/<run-id>/`；主会话 `/reload` 保留账本，子代理 resume 继承主会话账本。
+- 离线回归：`node --experimental-strip-types scripts/test-wb-credits.mjs`（假响应、主子并行、resume 与 usage 去重，不访问真实服务）。
+- 非官方客户端，属灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品），账号风险自担；合规路径是 Coding Plan / Token Plan 的 API Key。
+
+## 模型选择（`/models` / alt+m）
+
+`extensions/model-tree.ts` 把扁平模型列表改成两级树：先选 provider（带模型数和当前 provider 标记），再选该 provider 的模型（带上下文 / 输出上限 / thinking / image 能力），选完即切换，并可顺手选「保存为默认模型」——扩展 API 的 `pi.setModel()` 只切当前会话，所以保存直接写本机 `~/.pi/agent/settings.json` 的 `defaultProvider`/`defaultModel`（这两键在 `sync.excludeKeys` 里，属机器本地偏好，不参与同步）。内置 `/model` 保持不变，`/model provider/id` 仍可直接跳。
 
 **永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
 机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
@@ -79,11 +119,11 @@ pi                        # 启动即自动拉取合并，补齐全部插件/配
 {
   "sync": {
     "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
-    "enabled": true,     // 总开关
-    "autoSync": true,    // 启动拉取 + 退出推送
+    "enabled": true,     // 总开关（关闭后 /sync 与 CLI 均跳过）
+    "autoSync": true,    // 兼容旧配置保留解析；已无钩子消费，开关 pi 不再自动同步
     "excludeKeys": [],   // 额外排除的 settings 键
     "includeFiles": [],  // 额外纳入的文件，如 ["web-search.json"]
-    "lanHosts": []       // 内网镜像主机（ssh 别名），退出 pi 时自动转发
+    "lanHosts": []       // 内网镜像主机（ssh 别名），/sync lan 手动转发
   }
 }
 ```
