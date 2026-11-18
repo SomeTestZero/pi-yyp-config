@@ -339,7 +339,9 @@
         "config/pi/agent/extensions/pi-sync-guard.ts": 1794989348095,
         "config/pi/agent/extensions/rea-assist.ts": 1794989348095,
         "config/pi/agent/extensions/relays.auto.json": 1794989348095,
-        "config/pi/agent/extensions/relays.json": 1794989348095
+        "config/pi/agent/extensions/relays.json": 1794989348095,
+        "config/pi/agent/models.json": 1794989357143,
+        "config/pi/agent/extensions/strata-video.ts": 1794989357143
       },
       "yyp-home-pc": {
         "config/pi/agent/keybindings.json": 1792047273181,
