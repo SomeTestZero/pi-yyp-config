@@ -19,7 +19,7 @@
  * sync 前还会把 https://github.com/... 的插件远端统一改成 git@github.com:...。
  */
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -276,6 +276,68 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+/** 登录 shell 里 `command -v pi` 的实际解析结果（取最后一行非空输出）。 */
+function probePi(shellBin) {
+  const result = spawnSync(shellBin, ["-ilc", "command -v pi"], { encoding: "utf8", shell: false, timeout: 30_000 });
+  const lines = (result.stdout ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return lines.at(-1) ?? "";
+}
+
+/**
+ * 让包装真正拦截到 `pi`：PATH 里包装必须排在真实 pi 前面，否则 pi update --extensions
+ * 会绕过包装直接跑真实 pi，配置永远不落地（txy 2026-11-18 实测坑）。
+ * 1) 建 ~/.local/bin/pi 软链（Ubuntu 等默认 PATH 已把 ~/.local/bin 排最前）；
+ * 2) 登录 shell 仍解析不到包装时，向其 rc 追加带标记的 PATH 块（幂等，同 Windows profile 做法）。
+ */
+function ensureWrapperPriority() {
+  const localLink = join(home, ".local", "bin", "pi");
+  try {
+    mkdirSync(dirname(localLink), { recursive: true });
+    let st = null;
+    try { st = lstatSync(localLink); } catch {}
+    if (!st || st.isSymbolicLink()) {
+      if (st) unlinkSync(localLink);
+      symlinkSync(wrapperPath, localLink);
+      console.log(`已创建软链 ${localLink} → ${wrapperPath}`);
+    } else {
+      console.log(`pi-sync: ${localLink} 是普通文件，未覆盖；如需包装优先请手动处理`);
+    }
+  } catch (error) {
+    console.log(`pi-sync: 创建 ${localLink} 失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const wrapperReal = realpathSafe(wrapperPath);
+  const shellName = (process.env.SHELL ?? "").split("/").pop() || "bash";
+  const shellBin = whichAll(shellName)[0] ?? whichAll("bash")[0];
+  if (!shellBin) {
+    console.log("请确保 ~/.pi/agent/bin（或指向它的 ~/.local/bin/pi）位于 PATH 最前面，否则 pi update --extensions 不会触发同步。");
+    return;
+  }
+  const resolved = probePi(shellBin);
+  if (resolved.startsWith("/") && realpathSafe(resolved) === wrapperReal) {
+    console.log(`自检通过：登录 shell 的 pi → ${resolved}`);
+    return;
+  }
+  const rcPath = join(home, shellName === "zsh" ? ".zshrc" : ".bashrc");
+  const start = "# >>> pi-yyp-config update sync >>>";
+  const end = "# <<< pi-yyp-config update sync <<<";
+  const block = `${start}\nexport PATH="${binDir}:$PATH"\n${end}`;
+  try {
+    const existing = readTextSafe(rcPath) ?? "";
+    const pattern = new RegExp(`${start.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${end.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\r?\\n?`);
+    writeFileSync(rcPath, pattern.test(existing) ? existing.replace(pattern, `${block}\n`) : `${existing.trimEnd()}\n\n${block}\n`);
+    console.log(`已把包装目录写入 ${rcPath} 的 PATH 最前`);
+  } catch (error) {
+    console.log(`pi-sync: 写 ${rcPath} 失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  const after = probePi(shellBin);
+  if (after.startsWith("/") && realpathSafe(after) === wrapperReal) {
+    console.log(`自检通过：登录 shell 的 pi → ${after}（新开 shell 生效）`);
+  } else {
+    console.log(`警告：登录 shell 的 pi 仍解析为 ${after || "（无）"}；请手动确保 ${binDir} 位于 PATH 最前面，否则 pi update --extensions 不会触发同步。`);
+  }
+}
+
 function installPosix(_corePath) {
   const settingsPath = join(agentDir, "settings.json");
   const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
@@ -355,8 +417,8 @@ exec "$pi_sync_real" "$@"
   chmodSync(wrapperPath, 0o700);
   console.log(`已安装 Linux/macOS 更新入口：${wrapperPath}`);
   console.log(`真实 pi：${realPi}${version ? `（${version}）` : ""}`);
-  console.log(`自检：${wrapperPath} --version`);
-  console.log("请确保 ~/.pi/agent/bin（或指向它的 ~/.local/bin/pi）位于 PATH 最前面；新开 shell 后执行 pi update --extensions 即可完整同步。");
+  ensureWrapperPriority();
+  console.log("新开 shell 后执行 pi update --extensions 即可完整同步。");
 }
 
 function psQuote(value) {
