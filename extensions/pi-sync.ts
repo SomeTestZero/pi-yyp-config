@@ -1535,18 +1535,19 @@ export async function reconcileRemovedPackages(cfg: SyncConfig, notes: string[],
       const name = id.slice(4);
       const dir = path.join(agentDir(), "npm", "node_modules", name);
       if (fs.existsSync(dir)) {
-        const r = spawnSync("npm", ["uninstall", name, "--prefix", path.join(agentDir(), "npm")], {
-          shell: true,
-          timeout: INSTALL_TIMEOUT_MS,
-          encoding: "utf8",
-          env: process.env,
-        });
+        const uninstallArgs = ["uninstall", name, "--prefix", path.join(agentDir(), "npm")];
+        const spawnOpts = { shell: true, timeout: INSTALL_TIMEOUT_MS, encoding: "utf8" as const, env: process.env };
+        let r = spawnSync("npm", uninstallArgs, spawnOpts);
+        if ((r.error || r.status !== 0) && /ERESOLVE/i.test(String(r.stderr || r.stdout || ""))) {
+          // npm 卸载会重解析整棵树，残留包的 peer 冲突会误报 ERESOLVE；用 --legacy-peer-deps 重试一次
+          r = spawnSync("npm", [...uninstallArgs, "--legacy-peer-deps"], spawnOpts);
+        }
         if (!r.error && r.status === 0) {
           notes.push(`已卸载 ${id}`);
           clearAccepted(id);
           changed = true;
         } else {
-          errors.push(`卸载失败 ${id}: ${String(r.stderr || r.stdout || r.error?.message || "").trim().slice(0, 120)}`);
+          errors.push(`卸载失败 ${id}: ${String(r.stderr || r.stdout || r.error?.message || "").trim().slice(0, 200)}`);
         }
       } else if (hadAccepted(id)) {
         clearAccepted(id);
