@@ -4,30 +4,51 @@
  * 用一个私有 git 仓库作为唯一同步源，在多台山电脑之间同步：
  *   - settings.json（顶层键级三方合并，packages 并集，排除键不同步）
  *   - keybindings.json（整文件三方合并）
- *   - web-search.json（整文件三方合并；本机路径与 pi-web-access 实际读取处保持一致）
+ *   - models.json（整文件三方合并）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）
- * 删除通过墓碑（tombstone）传播；冲突在交互模式弹窗选择，自动模式跳过并挂起。
+ *   - 配置包自身实际加载目录的扩展、技能、提示词与主题源码
+ * 配置删除通过墓碑（tombstone）传播；包源码用 Git rebase 合并。
+ * 冲突在交互模式弹窗选择，自动模式跳过并挂起。
+ *
+ * 工作流（v1.5 起，无启动/退出自动同步）：
+ *   - 主力机改完配置/插件后主动 `/sync push`（或包装命令 `pi update --extensions`）推送。
+ *   - 其他机装过一次本机入口（/sync install-update）后，只需 `pi update --extensions`：
+ *     先完整同步（拉取→合并→落地→补装→卸载对账→推送），再调用真正的 pi 更新其余包。
+ *   - 开关 pi 本身零同步动作；不再注册 session_start / session_shutdown 钩子。
+ *
+ * 卸载对账（reconcileRemovedPackages）：pi 核心 `pi update --extensions` 只更新/补装清单内的包，
+ *   不卸载已移除的包；本扩展在落地后按 accepted/墓碑候选精确卸载（npm uninstall / 删干净 git 克隆），
+ *   使其他机仅跑更新命令即可完整对齐插件状态（含卸载）。
  *
  * 命令：
  *   /sync                 一键同步：拉取 → 合并 → 推送（交互解决冲突）
  *   /sync init [repo] [--mode=remote|local]   初始化（新机器接入）
  *   /sync push | pull | status | on | off
+ *   /sync install-update  安装本机入口：让 `pi update --extensions` 先完整同步再更新
+ *   /sync lan <ssh-host>  内网同步：配置仓库 + 所有 git 插件仓库推送到该主机
+ *                         的 ~/pi-mirror 镜像（自动建仓/配 insteadOf），并记住该主机；
+ *                         之后 `/sync lan`（不带参数）手动转发；/sync lan off 清空主机
  *
- * 自动同步（sync.autoSync，默认开）：session_start 后后台拉取合并；退出时若有本地改动则推送。
+ * CLI（非交互，供包装脚本调用）：node extensions/pi-sync.ts --run（或 env PI_SYNC_CLI=1）。
+ *   复用 runSync 完整流程；ui=null，pending 冲突跳过，失败设 process.exitCode=1，绝不静默覆盖本机改动。
+ *   配置包内未提交的源码修改由 syncSelfSource 自动 commit/rebase/push。
  *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
- *               "enabled": true, "autoSync": true,
- *               "excludeKeys": [] } }
+ *               "enabled": true,
+ *               "excludeKeys": [], "includeFiles": [],
+ *               "lanHosts": ["v2x"] } }   // 内网镜像主机（ssh config 别名），/sync lan 手动转发
+ *   autoSync 键仍被解析以兼容旧配置，但已无钩子消费它（开关 pi 不再触发同步）。
  *
  * 测试钩子：PI_SYNC_HOME 覆盖 ~/.pi，PI_SYNC_WORK 覆盖同步克隆目录。
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // 常量与路径
@@ -49,6 +70,7 @@ const BUILTIN_EXCLUDED_KEYS = new Set([
 
 const REPO_SETTINGS = "config/pi/agent/settings.json";
 const REPO_KEYBINDINGS = "config/pi/agent/keybindings.json";
+const REPO_MODELS = "config/pi/agent/models.json";
 const REPO_WEBSEARCH = "config/pi/web-search.json";
 const REPO_EXT_DIR = "config/pi/agent/extensions";
 const REPO_STATE = "config/sync-state.json";
@@ -74,25 +96,8 @@ function liveSettingsPath(): string {
 function liveKeybindingsPath(): string {
   return path.join(agentDir(), "keybindings.json");
 }
-/**
- * web-search.json 的本机路径。必须与 pi-web-access（web_search 扩展）的解析规则一致，
- * 否则同步过来的配置扩展根本读不到（曾因此失效：扩展已迁到 ~/.pi/agent/，
- * 而这里还在写旧路径 ~/.pi/）。
- * 解析顺序：PI_CODING_AGENT_DIR > $XDG_CONFIG_HOME/pi（若存在旧版 ~/.pi/web-search.json
- * 则优先旧版）> ~/.pi/agent。
- */
-function webSearchLivePath(): string {
-  const explicit = process.env.PI_CODING_AGENT_DIR;
-  if (explicit) return path.join(explicit, "web-search.json");
-  const xdg = process.env.XDG_CONFIG_HOME;
-  if (xdg) {
-    const xdgFile = path.join(xdg, "pi", "web-search.json");
-    if (fs.existsSync(xdgFile)) return xdgFile;
-    const legacy = path.join(piHome(), "web-search.json");
-    if (fs.existsSync(legacy)) return legacy;
-    return xdgFile;
-  }
-  return path.join(agentDir(), "web-search.json");
+function liveModelsPath(): string {
+  return path.join(agentDir(), "models.json");
 }
 function liveExtDir(): string {
   return path.join(agentDir(), "extensions");
@@ -133,6 +138,12 @@ interface SyncState {
   packages: Record<string, Meta>;
   files: Record<string, Meta>;
   tombstones: Tombstone[];
+  /** 每台机器确认「本机曾拥有」的包/键/文件（区分「从未安装」与「用户删除」，v1.3 起） */
+  accepted?: {
+    packages?: Record<string, Record<string, number>>;
+    settings?: Record<string, Record<string, number>>;
+    files?: Record<string, Record<string, number>>;
+  };
 }
 
 export interface SyncConfig {
@@ -141,6 +152,8 @@ export interface SyncConfig {
   repo?: string;
   machineId: string;
   excludeKeys: string[];
+  includeFiles: string[];
+  lanHosts: string[];
   branch?: string;
 }
 
@@ -167,7 +180,15 @@ type Side = Record<string, unknown>;
 // ---------------------------------------------------------------------------
 
 function emptyState(): SyncState {
-  return { version: 1, machines: {}, settings: {}, packages: {}, files: {}, tombstones: [] };
+  return {
+    version: 1,
+    machines: {},
+    settings: {},
+    packages: {},
+    files: {},
+    tombstones: [],
+    accepted: { packages: {}, settings: {}, files: {} },
+  };
 }
 
 export function stableStringify(v: unknown): string {
@@ -182,6 +203,33 @@ export function stableStringify(v: unknown): string {
 
 function jsonEq(a: unknown, b: unknown): boolean {
   return stableStringify(a) === stableStringify(b);
+}
+
+/** 更新提示的已读版本不是用户配置：逐来源取较新版本，避免无意义的跨机冲突。 */
+function mergeChangelogVersions(local: unknown, remote: unknown): Side | null {
+  if (!local || !remote || typeof local !== "object" || typeof remote !== "object" || Array.isArray(local) || Array.isArray(remote)) return null;
+  const out: Side = { ...(local as Side) };
+  for (const [key, value] of Object.entries(remote as Side)) {
+    const previous = out[key];
+    if (typeof previous !== "string" || typeof value !== "string") {
+      out[key] = value;
+      continue;
+    }
+    const parse = (version: string) => version.split(/[.-]/).map((part) => /^\d+$/.test(part) ? Number(part) : part);
+    const a = parse(previous);
+    const b = parse(value);
+    let newer = value;
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (a[i] === b[i]) continue;
+      if (a[i] === undefined) break;
+      if (b[i] === undefined) { newer = previous; break; }
+      if (typeof a[i] === "number" && typeof b[i] === "number") { if (a[i] > b[i]) newer = previous; break; }
+      if (String(a[i]) > String(b[i])) newer = previous;
+      break;
+    }
+    out[key] = newer;
+  }
+  return out;
 }
 
 function readJson(p: string): unknown | null {
@@ -307,7 +355,8 @@ export function packageId(source: string): string {
     }
     return "npm:" + name.toLowerCase();
   }
-  let body = s.startsWith("git:") && !s.startsWith("git@") ? s.slice(4) : s;
+  // 同时接受 git:git@host:org/repo 与 git@host:org/repo；前者是 pi 包声明的合法写法。
+  let body = s.startsWith("git:") ? s.slice(4) : s;
   if (isLocalPathSource(body)) return "local:" + path.resolve(body);
   // 去掉末尾 @ref（ref 中不含 / 和 :）
   const at = body.lastIndexOf("@");
@@ -326,11 +375,11 @@ export function packageId(source: string): string {
 function gitCloneRelDir(source: string): string | null {
   let s = source.trim();
   const isGit =
-    (s.startsWith("git:") && !s.startsWith("git@")) ||
+    s.startsWith("git:") ||
     /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ||
     s.startsWith("git@");
   if (!isGit) return null;
-  if (s.startsWith("git:") && !s.startsWith("git@")) s = s.slice(4);
+  if (s.startsWith("git:")) s = s.slice(4);
   if (isLocalPathSource(s)) return null;
   const at = s.lastIndexOf("@");
   if (at > 0) {
@@ -394,6 +443,25 @@ export function mergeStates(a: SyncState, b: SyncState): SyncState {
     if (!prev || t.ts >= prev.ts) tombMap.set(key, t);
   }
   out.tombstones = [...tombMap.values()];
+  out.accepted = {
+    packages: mergeAcceptedMaps(a.accepted?.packages, b.accepted?.packages),
+    settings: mergeAcceptedMaps(a.accepted?.settings, b.accepted?.settings),
+    files: mergeAcceptedMaps(a.accepted?.files, b.accepted?.files),
+  };
+  return out;
+}
+
+/** accepted 记账合并：按 (machine, id) 取时间戳较大者 */
+function mergeAcceptedMaps(
+  x?: Record<string, Record<string, number>>,
+  y?: Record<string, Record<string, number>>,
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const m of new Set([...Object.keys(x ?? {}), ...Object.keys(y ?? {})])) {
+    const merged: Record<string, number> = { ...(x?.[m] ?? {}) };
+    for (const [id, ts] of Object.entries(y?.[m] ?? {})) merged[id] = Math.max(merged[id] ?? 0, ts);
+    out[m] = merged;
+  }
   return out;
 }
 
@@ -430,6 +498,10 @@ export function loadConfig(): SyncConfig {
     repo: typeof s?.repo === "string" ? s.repo : undefined,
     machineId: typeof s?.machineId === "string" && s.machineId ? s.machineId : os.hostname(),
     excludeKeys: Array.isArray(s?.excludeKeys) ? (s!.excludeKeys as string[]) : [],
+    includeFiles: Array.isArray(s?.includeFiles) ? (s!.includeFiles as string[]) : [],
+    lanHosts: Array.isArray(s?.lanHosts)
+      ? (s!.lanHosts as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [],
     branch: typeof s?.branch === "string" ? s.branch : undefined,
   };
 }
@@ -568,8 +640,17 @@ async function commitIfDirty(message: string): Promise<boolean> {
 /**
  * 语义合并后创建真正的合并提交（把远端提交记为第二父提交）。
  * 即使内容无变化也必须建合并提交，否则双方历史永远分叉、push 永远 non-fast-forward。
+ *
+ * 非 config/ 的跟踪文件（包源码 extensions/、README、scripts 等）以远端 otherParent 为准：
+ * 工作克隆只负责 config/ 的三方合并，其索引中的源码是克隆时的旧版本；若直接 write-tree，
+ * 会把远端刚推送的源码更新覆盖回旧版（两克隆设计下源码被静默回退的根因）。
+ * 故先 read-tree 远端整树，再把本地合并好的 config/ 覆盖进索引 →
+ * merge 提交树 = 远端源码 + 合并后 config；reset --hard 同时把工作克隆源码刷新到远端最新。
+ * config/ 的合并结果仍完全来自 phase2（语义不变）。
  */
 async function commitMerge(otherParent: string, message: string): Promise<void> {
+  const rt = await git(["read-tree", otherParent]);
+  if (rt.code !== 0) return;
   await git(["add", "-A", "--", "config"]);
   const tree = await git(["write-tree"]);
   if (tree.code !== 0 || !tree.stdout.trim()) return;
@@ -596,7 +677,10 @@ function isIgnoredExtRel(rel: string): boolean {
 
 function liveAbsForRepoRel(rel: string, cfg: SyncConfig): string | null {
   if (rel === REPO_KEYBINDINGS) return liveKeybindingsPath();
-  if (rel === REPO_WEBSEARCH) return webSearchLivePath();
+  if (rel === REPO_MODELS) return liveModelsPath();
+  if (rel === REPO_WEBSEARCH) {
+    return cfg.includeFiles.includes("web-search.json") ? path.join(piHome(), "web-search.json") : null;
+  }
   if (rel.startsWith(REPO_EXT_DIR + "/")) {
     const sub = rel.slice(REPO_EXT_DIR.length + 1);
     if (isIgnoredExtRel(sub)) return null;
@@ -621,8 +705,11 @@ function walkFiles(dir: string, base = dir): string[] {
 function collectLiveFiles(cfg: SyncConfig): Map<string, string> {
   const m = new Map<string, string>();
   if (fs.existsSync(liveKeybindingsPath())) m.set(REPO_KEYBINDINGS, liveKeybindingsPath());
-  const ws = webSearchLivePath();
-  if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
+  if (fs.existsSync(liveModelsPath())) m.set(REPO_MODELS, liveModelsPath());
+  if (cfg.includeFiles.includes("web-search.json")) {
+    const ws = path.join(piHome(), "web-search.json");
+    if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
+  }
   for (const rel of walkFiles(liveExtDir())) {
     if (isIgnoredExtRel(rel)) continue;
     m.set(`${REPO_EXT_DIR}/${rel}`, path.join(liveExtDir(), ...rel.split("/")));
@@ -635,8 +722,12 @@ function collectTreeFiles(cfg: SyncConfig): Map<string, string> {
   const root = workDir();
   const kb = path.join(root, REPO_KEYBINDINGS);
   if (fs.existsSync(kb)) m.set(REPO_KEYBINDINGS, kb);
-  const ws = path.join(root, REPO_WEBSEARCH);
-  if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
+  const mj = path.join(root, REPO_MODELS);
+  if (fs.existsSync(mj)) m.set(REPO_MODELS, mj);
+  if (cfg.includeFiles.includes("web-search.json")) {
+    const ws = path.join(root, REPO_WEBSEARCH);
+    if (fs.existsSync(ws)) m.set(REPO_WEBSEARCH, ws);
+  }
   const extRoot = path.join(root, REPO_EXT_DIR);
   for (const rel of walkFiles(extRoot)) {
     if (isIgnoredExtRel(rel)) continue;
@@ -720,6 +811,15 @@ export function mergeSettingsKeys(opts: {
     if (hasL && hasR && jsonEq(l, r)) {
       state.settings[k] = state.settings[k] ?? remoteMeta[k] ?? { ts: now, machine };
       continue; // 收敛
+    }
+    if (k === "extensionChangelogVersions" && hasL && hasR) {
+      const merged = mergeChangelogVersions(l, r);
+      if (merged) {
+        tree[k] = merged;
+        state.settings[k] = { ts: now, machine };
+        notes.push(`~${k}（合并各来源的已读版本）`);
+        continue;
+      }
     }
     if (!hasL && !hasR) continue; // 双方都删了
     if (!hasL && hasR) {
@@ -869,6 +969,42 @@ export function mergePackageLists(opts: {
 // phase1：本机改动 -> 工作克隆（2-way，记录时间戳与墓碑）
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 本机拥有记账（accepted）：区分「从未安装/尚未落盘」与「用户真的删除了」
+// ---------------------------------------------------------------------------
+
+type AcceptedKind = "packages" | "settings" | "files";
+
+/** 幂等记账：把给定 id 标记为本机拥有 */
+function ensureAccepted(
+  state: SyncState,
+  kind: AcceptedKind,
+  machine: string,
+  ids: Iterable<string>,
+  now: number,
+): void {
+  if (!state.accepted) state.accepted = { packages: {}, settings: {}, files: {} };
+  const bucket = (state.accepted[kind] ??= {});
+  bucket[machine] = bucket[machine] ?? {};
+  for (const id of ids) {
+    if (bucket[machine][id] === undefined) bucket[machine][id] = now;
+  }
+}
+
+/** 本机是否曾拥有：以 accepted 记账为准；旧状态文件回退到「元数据由本机最后写入」或本机安装目录存在 */
+function locallyHad(state: SyncState, kind: AcceptedKind, machine: string, id: string, src?: string): boolean {
+  if (state.accepted?.[kind]?.[machine]?.[id] !== undefined) return true;
+  if (kind !== "packages") {
+    const meta = kind === "settings" ? state.settings[id] : state.files[id];
+    return !!(meta && meta.machine === machine);
+  }
+  const meta = state.packages[id];
+  if (meta && meta.machine === machine) return true;
+  if (id.startsWith("npm:")) return fs.existsSync(path.join(agentDir(), "npm", "node_modules", id.slice(4)));
+  const rel = src ? gitCloneRelDir(src) : null;
+  return !!rel && fs.existsSync(path.join(agentDir(), "git", rel));
+}
+
 function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { changed: boolean; notes: string[] } {
   const now = Date.now();
   const machine = cfg.machineId;
@@ -881,6 +1017,15 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   const live = (readJson(liveSettingsPath()) ?? {}) as Side;
   const treePath = path.join(workDir(), REPO_SETTINGS);
   const tree = (readJson(treePath) ?? {}) as Side;
+
+  // 记账：本机 live 中实际存在的键视为本机拥有（幂等，首跑为存量配置补记账）
+  ensureAccepted(
+    state,
+    "settings",
+    machine,
+    Object.keys(live).filter((k) => !excluded.has(k)),
+    now,
+  );
 
   const keys = new Set([...Object.keys(live), ...Object.keys(tree)]);
   for (const k of keys) {
@@ -895,6 +1040,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       changed = true;
       notes.push(`${hasT ? "~" : "+"}${k}`);
     } else if (!hasL && hasT) {
+      if (!locallyHad(state, "settings", machine, k)) continue; // 本机从未落盘（如刚合并进树、尚未 applyToLive）→ 不视为删除
       delete tree[k];
       delete state.settings[k];
       addTombstone(state, "setting", k, now, machine);
@@ -908,6 +1054,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
   const treePkgs = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
   const liveById = new Map(livePkgs.map((e) => [packageId(entrySource(e)), e]));
   const treeById = new Map(treePkgs.map((e) => [packageId(entrySource(e)), e]));
+  ensureAccepted(state, "packages", machine, liveById.keys(), now);
   let pkgChanged = false;
   for (const id of new Set([...liveById.keys(), ...treeById.keys()])) {
     const inL = liveById.has(id);
@@ -920,6 +1067,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       notes.push(`${inT ? "~" : "+"}包 ${id}`);
     } else if (!inL && inT) {
       if (id === protectedId) continue; // 同步扩展自身所在的包不允许被删除传播
+      if (!locallyHad(state, "packages", machine, id, entrySource(treeById.get(id)!))) continue; // 从未在本机安装 → 不视为删除
       treeById.delete(id);
       delete state.packages[id];
       addTombstone(state, "package", id, now, machine);
@@ -936,10 +1084,18 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
 
   if (changed) writeJson(treePath, tree);
 
-  // 文件（keybindings / web-search / extensions）
+  // 文件（keybindings / models / web-search / extensions）
   const liveFiles = collectLiveFiles(cfg);
   const treeFiles = collectTreeFiles(cfg);
-  // web-search.json 现已默认纳入同步（文件可能含 API key，仓库必须保持私有）
+  ensureAccepted(state, "files", machine, liveFiles.keys(), now);
+  // web-search.json 未显式启用时停止跟踪（脚本时代遗留，可能含 API key）
+  if (!cfg.includeFiles.includes("web-search.json") && treeFiles.has(REPO_WEBSEARCH)) {
+    fs.unlinkSync(treeFiles.get(REPO_WEBSEARCH)!);
+    treeFiles.delete(REPO_WEBSEARCH);
+    delete state.files[REPO_WEBSEARCH];
+    changed = true;
+    notes.push(`-文件 ${REPO_WEBSEARCH}（停止跟踪）`);
+  }
   for (const rel of new Set([...liveFiles.keys(), ...treeFiles.keys()])) {
     if (pending.has(`file:${rel}`)) continue;
     const lp = liveFiles.get(rel);
@@ -961,6 +1117,7 @@ function phase1(cfg: SyncConfig, state: SyncState, pending: Set<string>): { chan
       changed = true;
       notes.push(`+文件 ${rel}`);
     } else if (!lp && tp) {
+      if (!locallyHad(state, "files", machine, rel)) continue; // 本机从未有过（如远端新增尚未落地）→ 不视为删除
       fs.unlinkSync(tp);
       delete state.files[rel];
       addTombstone(state, "file", rel, now, machine);
@@ -1199,6 +1356,8 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
   const notes: string[] = [];
   let changed = false;
   const excluded = excludedKeys(cfg);
+  const addedKeys = new Set<string>();
+  const addedFileRels = new Set<string>();
 
   // settings：保留本机排除键与被挂起键，其余以 tree 为准
   const liveP = liveSettingsPath();
@@ -1211,6 +1370,7 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
     if (!jsonEq(next[k], tree[k])) {
       next[k] = tree[k];
       changed = true;
+      if (k !== "packages") addedKeys.add(k);
     }
   }
   for (const k of Object.keys(live)) {
@@ -1236,6 +1396,7 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
     if (!fs.existsSync(lp) || !fs.readFileSync(lp).equals(fs.readFileSync(tp))) {
       fs.mkdirSync(path.dirname(lp), { recursive: true });
       fs.copyFileSync(tp, lp);
+      addedFileRels.add(rel);
       changed = true;
       notes.push(`文件落地 ${rel}`);
     }
@@ -1250,6 +1411,24 @@ function applyToLive(cfg: SyncConfig, pending: Set<string>): { changed: boolean;
       } catch {}
     }
   }
+
+  // 记账：本次落盘新增的键/包/文件视为本机拥有（供 phase1 区分「未安装」与「用户删除」）
+  const stPath = path.join(workDir(), REPO_STATE);
+  const st = (readJson(stPath) as SyncState | null) ?? emptyState();
+  ensureAccepted(st, "settings", cfg.machineId, addedKeys, Date.now());
+  const treePkgList = Array.isArray(tree.packages) ? (tree.packages as unknown[]) : [];
+  const livePkgIds = new Set(
+    (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => packageId(entrySource(e))),
+  );
+  ensureAccepted(
+    st,
+    "packages",
+    cfg.machineId,
+    treePkgList.map((e) => packageId(entrySource(e))).filter((id) => !livePkgIds.has(id)),
+    Date.now(),
+  );
+  ensureAccepted(st, "files", cfg.machineId, addedFileRels, Date.now());
+  writeJson(stPath, st);
   return { changed, notes };
 }
 
@@ -1289,26 +1468,320 @@ async function materialize(prevLivePackages: unknown[], notes: string[], errors:
 }
 
 // ---------------------------------------------------------------------------
+// 卸载对账：pi 核心 update 只补装不卸载，这里按 accepted/墓碑候选精确移除已删包
+// ---------------------------------------------------------------------------
+
+/** 按候选相对路径在 ~/.pi/agent/git 下定位克隆目录（大小写不敏感，仅限该路径逐段 readdir，非广扫） */
+function resolveGitCloneDir(rel: string): string | null {
+  const base = path.join(agentDir(), "git");
+  if (!fs.existsSync(base)) return null;
+  let cur = base;
+  for (const seg of rel.split("/")) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(cur);
+    } catch {
+      return null;
+    }
+    const match = entries.find((e) => e === seg) ?? entries.find((e) => e.toLowerCase() === seg.toLowerCase());
+    if (!match) return null;
+    cur = path.join(cur, match);
+  }
+  try {
+    return fs.statSync(cur).isDirectory() ? cur : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 卸载对账（applyToLive 之后运行，手动 /sync pull 与 CLI 均受益）。
+ * 候选集 = accepted.packages 各机记账 id ∪ package 墓碑 id；凡不在合并后清单（归一化 packageId）
+ * 且本机安装目录存在者 → 卸载：npm 按名精确 uninstall；git 克隆干净才删目录，脏则跳过+警告。
+ * 目录已不存在的仅清 accepted 记账。只动候选，绝不碰清单内包或无关 npm 依赖。
+ * 清除某 id 的 accepted 时跨所有机器清（该包已从共享清单移除，防止 mergeStates 从旧状态反复复活记账）。
+ * 返回是否有状态变更（供调用方 commit）。
+ */
+export async function reconcileRemovedPackages(cfg: SyncConfig, notes: string[], errors: string[]): Promise<boolean> {
+  const stPath = path.join(workDir(), REPO_STATE);
+  const state = (readJson(stPath) as SyncState | null) ?? emptyState();
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const mergedIds = new Set(
+    (Array.isArray(live.packages) ? (live.packages as unknown[]) : []).map((e) => packageId(entrySource(e))),
+  );
+  const candidates = new Set<string>();
+  for (const bucket of Object.values(state.accepted?.packages ?? {})) {
+    for (const id of Object.keys(bucket)) candidates.add(id);
+  }
+  for (const t of state.tombstones) if (t.type === "package") candidates.add(t.id);
+
+  let changed = false;
+  const hadAccepted = (id: string): boolean =>
+    Object.values(state.accepted?.packages ?? {}).some((m) => m[id] !== undefined);
+  const clearAccepted = (id: string): void => {
+    const ap = state.accepted?.packages;
+    if (!ap) return;
+    for (const m of Object.keys(ap)) {
+      if (ap[m][id] !== undefined) {
+        delete ap[m][id];
+        changed = true;
+      }
+    }
+  };
+
+  for (const id of [...candidates].sort()) {
+    if (mergedIds.has(id)) continue; // 清单内包绝不卸载
+    if (id.startsWith("npm:")) {
+      const name = id.slice(4);
+      const dir = path.join(agentDir(), "npm", "node_modules", name);
+      if (fs.existsSync(dir)) {
+        const r = spawnSync("npm", ["uninstall", name, "--prefix", path.join(agentDir(), "npm")], {
+          shell: true,
+          timeout: INSTALL_TIMEOUT_MS,
+          encoding: "utf8",
+          env: process.env,
+        });
+        if (!r.error && r.status === 0) {
+          notes.push(`已卸载 ${id}`);
+          clearAccepted(id);
+          changed = true;
+        } else {
+          errors.push(`卸载失败 ${id}: ${String(r.stderr || r.stdout || r.error?.message || "").trim().slice(0, 120)}`);
+        }
+      } else if (hadAccepted(id)) {
+        clearAccepted(id);
+        notes.push(`清记账 ${id}（本机已无安装）`);
+      }
+    } else if (id.startsWith("git:")) {
+      const dir = resolveGitCloneDir(id.slice(4));
+      if (dir) {
+        const st = await run("git", ["status", "--porcelain"], { cwd: dir, timeout: 15_000, env: GIT_ENV() });
+        if (st.code !== 0) {
+          errors.push(`卸载跳过 ${id}：无法读取 git 状态`);
+          continue;
+        }
+        if (st.stdout.trim()) {
+          notes.push(`跳过卸载 ${id}（克隆有未提交改动）`);
+          continue;
+        }
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+          notes.push(`已卸载 ${id}（删除干净克隆）`);
+          clearAccepted(id);
+          changed = true;
+        } catch (e) {
+          errors.push(`删除克隆失败 ${id}: ${(e as Error).message}`);
+        }
+      } else if (hadAccepted(id)) {
+        clearAccepted(id);
+        notes.push(`清记账 ${id}（本机已无克隆）`);
+      }
+    }
+    // local: 或其他来源不自动卸载（无法安全判定安装目录）
+  }
+  if (changed) writeJson(stPath, state);
+  return changed;
+}
+
+// ---------------------------------------------------------------------------
+// 配置包自身源码：同步实际加载目录，不再依赖手工维护另一份 Git 克隆
+// ---------------------------------------------------------------------------
+
+const SELF_SOURCE_DIRS = ["extensions", "skills", "prompts", "themes", "scripts", "docs"];
+const SELF_SOURCE_FILES = ["README.md", "CHANGELOG.md", "package.json", "package-lock.json"];
+
+function selfPackageEntry(cfg: SyncConfig): unknown | undefined {
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const entries = Array.isArray(live.packages) ? live.packages : [];
+  const id = selfPackageId(cfg);
+  const exact = entries.find((e) => packageId(entrySource(e)) === id);
+  if (exact) return exact;
+  // sync.repo 使用本地镜像路径时按仓库名匹配；packages 里只有一个自包才启用。
+  const base = (repo: string) => repo.replace(/[\\/]$/, "").split(/[\\/:]/).pop()?.replace(/\.git$/i, "").toLowerCase();
+  const repoName = cfg.repo ? base(cfg.repo) : undefined;
+  if (!repoName) return undefined;
+  const candidates = entries.filter((e) => base(entrySource(e)) === repoName);
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function selfSourceDir(cfg: SyncConfig): string | null {
+  const entry = selfPackageEntry(cfg);
+  if (!entry) return null;
+  const src = entrySource(entry);
+  const rel = gitCloneRelDir(src);
+  if (!rel) return null;
+  const candidates = [rel, rel.replace(/\.git$/i, "")];
+  const dir = candidates.map((relDir) => path.join(agentDir(), "git", relDir)).find((candidate) => fs.existsSync(path.join(candidate, ".git")));
+  if (!dir) return null;
+  // 包源与 sync.repo 可能一个写 git:git@host:path，另一个写 git@host:path；
+  // 以实际 origin 再校验一次，兼容历史配置且避免误操作其他本地路径仓库。
+  if (fs.existsSync(path.join(dir, ".git"))) {
+    const actual = cpExecGitConfig(dir);
+    if (actual && packageId(actual) !== packageId(src) && packageId(actual) !== packageId(cfg.repo ?? "")) return null;
+  }
+  return fs.existsSync(path.join(dir, ".git")) && fs.existsSync(path.join(dir, "package.json")) ? dir : null;
+}
+
+/** 配置包 scripts 目录：优先按实际加载目录，回退到本扩展文件所在包的 scripts */
+function selfScriptsDir(cfg: SyncConfig): string | null {
+  const dir = selfSourceDir(cfg);
+  if (dir) return path.join(dir, "scripts");
+  try {
+    const extDir = path.dirname(fileURLToPath(import.meta.url));
+    return path.join(path.dirname(extDir), "scripts");
+  } catch {
+    return null;
+  }
+}
+
+function cpExecGitConfig(dir: string): string {
+  try {
+    return execFileSync("git", ["-C", dir, "config", "--get", "remote.origin.url"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      env: GIT_ENV(),
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function selfGit(dir: string, args: string[], timeout = 30_000) {
+  return run("git", args, { cwd: dir, timeout, env: GIT_ENV() });
+}
+
+/** 只处理源码/清单，不提交 node_modules、日志等机器产物。 */
+function selfSourcePaths(dir: string): string[] {
+  return [
+    ...SELF_SOURCE_DIRS.filter((name) => fs.existsSync(path.join(dir, name))),
+    ...SELF_SOURCE_FILES.filter((name) => fs.existsSync(path.join(dir, name))),
+  ];
+}
+
+async function ensureSelfIdentity(dir: string): Promise<void> {
+  const name = await selfGit(dir, ["config", "user.name"]);
+  if (name.code !== 0 || !name.stdout.trim()) {
+    await selfGit(dir, ["config", "user.name", `pi-sync (${os.hostname()})`]);
+    await selfGit(dir, ["config", "user.email", "pi-sync@localhost"]);
+  }
+}
+
+/**
+ * 实际加载目录有改动时自动 commit，再 rebase 到远端最新状态。
+ * 文件是否存在由 Git 祖先关系判断：新机器从未拥有该文件不等于用户删除。
+ * 真正的内容冲突保留 rebase 现场，不 reset、不强推、不静默覆盖。
+ */
+async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean): Promise<void> {
+  const dir = selfSourceDir(cfg);
+  if (!dir) return;
+  const sourcePaths = selfSourcePaths(dir);
+  if (!sourcePaths.length) return;
+  await ensureSelfIdentity(dir);
+
+  const dirty = await selfGit(dir, ["status", "--porcelain", "--", ...sourcePaths]);
+  if (dirty.code !== 0) {
+    result.errors.push(`配置包状态读取失败：${dirty.stderr.trim().slice(0, 120)}`);
+    return;
+  }
+  const rebaseInProgress =
+    fs.existsSync(path.join(dir, ".git", "rebase-merge")) || fs.existsSync(path.join(dir, ".git", "rebase-apply"));
+  if (rebaseInProgress) {
+    result.errors.push(`配置包源码有未解决的 rebase：请在 ${dir} 完成或中止后再 /sync`);
+    return;
+  }
+  if (dirty.stdout.trim()) {
+    await selfGit(dir, ["add", "-A", "--", ...sourcePaths]);
+    const commit = await selfGit(dir, ["commit", "-m", `pi-sync: update package from ${cfg.machineId}`]);
+    if (commit.code !== 0) {
+      result.errors.push(`配置包改动提交失败：${commit.stderr.trim().slice(0, 160)}`);
+      return;
+    }
+    result.notes.push("配置包源码已自动提交");
+  }
+
+  const upstreamStatus = await selfGit(dir, ["rev-parse", "--verify", "@{upstream}"]);
+  if (upstreamStatus.code !== 0) await selfGit(dir, ["branch", "--set-upstream-to", "origin/main"]);
+  const fetch = await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+  if (fetch.code !== 0) {
+    if (push) result.errors.push("配置包源码拉取失败，请联网后运行 /sync push");
+    return;
+  }
+  const branch = (await selfGit(dir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim() || "main";
+  const upstream = `origin/${branch}`;
+  if ((await selfGit(dir, ["rev-parse", "--verify", upstream])).code !== 0) return;
+
+  const incoming = parseInt((await selfGit(dir, ["rev-list", "--count", `HEAD..${upstream}`])).stdout.trim(), 10) || 0;
+  if (incoming > 0) {
+    const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", upstream], 120_000);
+    if (rebase.code !== 0) {
+      result.errors.push(`配置包源码有冲突：请在 ${dir} 完成 git rebase，再运行 /sync`);
+      return;
+    }
+    result.notes.push("配置包源码已更新");
+    result.changedLocal = true;
+  }
+
+  const outgoing = parseInt((await selfGit(dir, ["rev-list", "--count", `${upstream}..HEAD`])).stdout.trim(), 10) || 0;
+  if (outgoing === 0) return;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const pushed = await selfGit(dir, ["push", "origin", `HEAD:${branch}`], PUSH_TIMEOUT_MS);
+    if (pushed.code === 0) {
+      result.pushed = true;
+      result.notes.push("配置包源码已推送");
+      return;
+    }
+    if (!/non-fast-forward|fetch first|rejected|stale/i.test(pushed.stderr) || attempt === 2) {
+      result.errors.push(`配置包源码推送失败：${pushed.stderr.trim().slice(0, 160)}`);
+      return;
+    }
+    await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+    const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", upstream], 120_000);
+    if (rebase.code !== 0) {
+      result.errors.push(`配置包源码有冲突：请在 ${dir} 完成 git rebase，再运行 /sync`);
+      return;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 锁
 // ---------------------------------------------------------------------------
 
 function acquireLock(): boolean {
   try {
-  	const p = lockPath();
+    const p = lockPath();
     if (fs.existsSync(p)) {
-      const raw = readJson(p) as { ts?: number } | null;
-      if (raw?.ts && Date.now() - raw.ts < LOCK_MAX_AGE_MS) return false;
+      const raw = readJson(p) as { ts?: number; pid?: number } | null;
+      // 只看 ts 会把崩溃进程留下的锁当成“正在同步”，直到 LOCK_MAX_AGE_MS 过期；先确认持有者是否还活着。
+      let alive = false;
+      if (typeof raw?.pid === "number" && raw.pid > 0) {
+        try { process.kill(raw.pid, 0); alive = true; }
+        catch (error) { alive = (error as NodeJS.ErrnoException).code === "EPERM"; }
+      }
+      if (alive && raw?.ts && Date.now() - raw.ts < LOCK_MAX_AGE_MS) return false;
     }
     writeJson(p, { pid: process.pid, ts: Date.now() });
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
+}
+
+// 慢网络下的 fetch/rebase/push 会超过 LOCK_MAX_AGE_MS，心跳让锁在持有者存活期间保持新鲜。
+let lockHeartbeat: ReturnType<typeof setInterval> | undefined;
+function startLockHeartbeat(): void {
+  lockHeartbeat = setInterval(() => {
+    const raw = readJson(lockPath()) as { pid?: number } | null;
+    if (raw?.pid === process.pid) writeJson(lockPath(), { pid: process.pid, ts: Date.now() });
+  }, 30_000);
+  lockHeartbeat.unref();
 }
 
 function releaseLock(): void {
+  if (lockHeartbeat) clearInterval(lockHeartbeat);
+  lockHeartbeat = undefined;
   try {
-    fs.unlinkSync(lockPath());
+    // 只删自己的锁：超时后别的进程可能已经接手。
+    const raw = readJson(lockPath()) as { pid?: number } | null;
+    if (raw?.pid === process.pid) fs.unlinkSync(lockPath());
   } catch {}
 }
 
@@ -1335,13 +1808,14 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     result.errors.push("另一个同步正在进行中，已跳过");
     return result;
   }
+  const pending = loadPending();
   try {
+    startLockHeartbeat();
     const cloneErr = await ensureClone(cfg);
     if (cloneErr) {
       result.errors.push(cloneErr);
       return result;
     }
-    const pending = loadPending();
     const prevLive = (readJson(liveSettingsPath()) ?? {}) as Side;
     const prevLivePackages = Array.isArray(prevLive.packages) ? (prevLive.packages as unknown[]) : [];
 
@@ -1466,6 +1940,10 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       await materialize(prevLivePackages, result.notes, result.errors);
     }
 
+    // 卸载对账：清单中已移除（accepted/墓碑候选）且本机仍安装的包 → 精确卸载
+    const reconciled = await reconcileRemovedPackages(cfg, result.notes, result.errors);
+    if (reconciled) await commitIfDirty(`pi-sync: reconcile removed packages (${cfg.machineId})`);
+
     // 推送
     if (opts.push) {
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -1492,11 +1970,16 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       }
     }
 
+    // 包源码必须最后同步：phase2/commitMerge 会对同一远端工作副本 reset --hard。
+    // 若提前推送，旧工作副本会把刚合并的扩展再次覆盖（WorkBuddy 回退的根因）。
+    await syncSelfSource(cfg, result, opts.push);
+
     savePending(pending);
     result.conflictsPending = pending.size;
     result.ok = result.errors.length === 0;
     return result;
   } finally {
+    savePending(pending);
     releaseLock();
   }
 }
@@ -1560,6 +2043,228 @@ export async function performInit(
 }
 
 // ---------------------------------------------------------------------------
+// 内网镜像（lan push）：把配置/插件仓库从本机转发到内网机的本地 git 镜像
+//
+// 目标机约定（ensureLanMirror 自动建立，幂等）：
+//   ~/pi-mirror/<name>.git        裸仓库（<name> 为仓库名，不含 .git）
+//   ~/pi-mirror/<name> → .git     软链，兼容 URL 带不带 .git 后缀两种写法
+//   git config url."$HOME/pi-mirror/".insteadOf = https://<host>/<org>/ 等
+// 目标机 pi 的 sync.repo 指向 $HOME/pi-mirror/<sync仓库名>.git 即可全程离线同步。
+// ---------------------------------------------------------------------------
+
+const LAN_MIRROR_DIR = "pi-mirror"; // 目标机 $HOME 下的镜像目录
+const LAN_PROBE_TIMEOUT_MS = 8_000;
+const LAN_ENSURE_TIMEOUT_MS = 45_000;
+const LAN_FETCH_TIMEOUT_MS = 25_000;
+
+interface LanRepo {
+  /** 镜像仓库名（不含 .git） */
+  name: string;
+  /** 本地克隆目录 */
+  dir: string;
+  /** 推送源 ref；空串表示运行时探测（origin/HEAD → origin/main → HEAD） */
+  src: string;
+}
+
+export interface LanHostResult {
+  host: string;
+  skipped?: string;
+  pushed: string[];
+  failed: string[];
+}
+
+/** sh 单引号转义 */
+function shq(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** 通过 ssh 在目标机执行 sh 脚本（stdin 传入，非交互） */
+function runSsh(
+  host: string,
+  script: string,
+  timeout = LAN_ENSURE_TIMEOUT_MS,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const p = spawn("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "sh", "-s"], { env: process.env });
+    let stdout = "";
+    let stderr = "";
+    const t = setTimeout(() => {
+      try {
+        p.kill();
+      } catch {}
+      resolve({ code: 1, stdout, stderr: stderr || "ssh 超时" });
+    }, timeout);
+    p.stdout?.on("data", (d) => (stdout += d));
+    p.stderr?.on("data", (d) => (stderr += d));
+    p.on("error", (e) => {
+      clearTimeout(t);
+      resolve({ code: 1, stdout, stderr: e.message });
+    });
+    p.on("close", (c) => {
+      clearTimeout(t);
+      resolve({ code: c ?? 1, stdout, stderr });
+    });
+    p.stdin?.write(script);
+    p.stdin?.end();
+  });
+}
+
+/** 解析 git 包源 → { host, user, project }；npm:/本地路径/无法识别返回 null */
+export function parseGitPkg(src0: string): { host: string; user: string; project: string } | null {
+  let u = (src0 ?? "").trim();
+  if (!u || u.startsWith("npm:")) return null;
+  if (/^\.{0,2}[\\/]/.test(u) || /^[a-zA-Z]:[\\/]/.test(u)) return null; // 本地路径
+  if (u.startsWith("git:")) u = u.slice(4).trim();
+  // 去掉末尾 @ref（仅当 @ 出现在最后一个 / 之后，避免误伤 git@host 写法）
+  const at = u.lastIndexOf("@");
+  if (at > u.lastIndexOf("/")) u = u.slice(0, at);
+  u = u.replace(/\.git$/, "");
+  let m = u.match(/^git@([^:/]+):([^/]+)\/([^/]+)$/); // git@host:user/repo
+  if (!m) m = u.match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/([^/]+)\/([^/]+)$/i); // proto://[user@]host[:port]/user/repo
+  if (!m) m = u.match(/^([^/:@\s]+\.[^/:@\s]+)\/([^/]+)\/([^/]+)$/); // host/user/repo 裸形式
+  if (!m) return null;
+  return { host: m[1], user: m[2], project: m[3] };
+}
+
+/** 收集需要镜像的仓库：配置同步仓库（含 config/ 快照）+ 所有 git 包的本地克隆 */
+export function lanRepos(cfg: SyncConfig): LanRepo[] {
+  const out: LanRepo[] = [];
+  const seen = new Set<string>();
+  const selfName = cfg.repo ? parseGitPkg(cfg.repo)?.project : undefined;
+  if (selfName && /^[\w][\w.-]*$/.test(selfName) && fs.existsSync(path.join(workDir(), ".git"))) {
+    out.push({ name: selfName, dir: workDir(), src: "HEAD" });
+    seen.add(selfName);
+  }
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  const pkgs = Array.isArray(live.packages) ? (live.packages as unknown[]) : [];
+  for (const e of pkgs) {
+    const info = parseGitPkg(entrySource(e));
+    if (!info || seen.has(info.project) || !/^[\w][\w.-]*$/.test(info.project)) continue;
+    const dir = path.join(agentDir(), "git", info.host, info.user, info.project);
+    if (!fs.existsSync(path.join(dir, ".git"))) continue; // 未安装的包跳过
+    seen.add(info.project);
+    out.push({ name: info.project, dir, src: "" });
+  }
+  return out;
+}
+
+/** 目标机 insteadOf 前缀：每个 (host,user) 覆盖 https 与 git@ 两种写法 */
+function lanPrefixes(cfg: SyncConfig): string[] {
+  const pairs = new Map<string, { host: string; user: string }>();
+  const add = (src: string) => {
+    const i = parseGitPkg(src);
+    if (i) pairs.set(`${i.host}/${i.user}`, i);
+  };
+  if (cfg.repo) add(cfg.repo);
+  const live = (readJson(liveSettingsPath()) ?? {}) as Side;
+  for (const e of Array.isArray(live.packages) ? (live.packages as unknown[]) : []) add(entrySource(e));
+  const out: string[] = [];
+  for (const { host, user } of pairs.values()) out.push(`https://${host}/${user}/`, `git@${host}:${user}/`);
+  return out;
+}
+
+/** 在目标机建立镜像目录与 URL 重写（幂等）；返回错误信息或 null */
+async function ensureLanMirror(host: string, repos: LanRepo[], cfg: SyncConfig): Promise<string | null> {
+  const prefixes = lanPrefixes(cfg);
+  const lines = [
+    "set -e",
+    `mkdir -p "$HOME/${LAN_MIRROR_DIR}"`,
+    `cd "$HOME/${LAN_MIRROR_DIR}"`,
+    `for r in ${repos.map((r) => shq(r.name)).join(" ")}; do`,
+    `  if [ ! -d "$r.git" ]; then git init --bare -q "$r.git"; git -C "$r.git" symbolic-ref HEAD refs/heads/main; fi`,
+    `  ln -sfn "$r.git" "$r"`,
+    "done",
+  ];
+  if (prefixes.length) {
+    lines.push(
+      `base="$HOME/${LAN_MIRROR_DIR}/"`,
+      `for p in ${prefixes.map(shq).join(" ")}; do`,
+      `  git config --global --get-all "url.$base.insteadOf" 2>/dev/null | grep -qxF "$p" || git config --global --add "url.$base.insteadOf" "$p"`,
+      "done",
+    );
+  }
+  lines.push("echo LAN_MIRROR_READY");
+  const r = await runSsh(host, lines.join("\n"));
+  if (r.code !== 0 || !r.stdout.includes("LAN_MIRROR_READY")) {
+    return (r.stderr || r.stdout).trim().slice(0, 160) || "远端镜像初始化失败";
+  }
+  return null;
+}
+
+async function detectSrcRef(dir: string): Promise<string> {
+  for (const ref of ["origin/HEAD", "origin/main", "HEAD"]) {
+    const r = await run("git", ["rev-parse", "--verify", ref], { cwd: dir, timeout: 8_000, env: GIT_ENV() });
+    if (r.code === 0) return ref;
+  }
+  return "";
+}
+
+async function lanPushHost(cfg: SyncConfig, host: string): Promise<LanHostResult> {
+  const res: LanHostResult = { host, pushed: [], failed: [] };
+  const probe = await run("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "true"], {
+    timeout: LAN_PROBE_TIMEOUT_MS + 4_000,
+  });
+  if (probe.code !== 0) {
+    res.skipped = "主机不可达";
+    return res;
+  }
+  const repos = lanRepos(cfg);
+  if (!repos.length) {
+    res.skipped = "本机没有可镜像的 git 包";
+    return res;
+  }
+  const ensureErr = await ensureLanMirror(host, repos, cfg);
+  if (ensureErr) {
+    res.skipped = `镜像初始化失败: ${ensureErr}`;
+    return res;
+  }
+  for (const r of repos) {
+    let src = r.src;
+    if (!src) {
+      // 尽力刷新 GitHub 最新状态；不可达则用本地缓存（离线场景正常）
+      await run("git", ["fetch", "origin", "-q"], { cwd: r.dir, timeout: LAN_FETCH_TIMEOUT_MS, env: GIT_ENV() });
+      src = await detectSrcRef(r.dir);
+    }
+    if (!src) {
+      res.failed.push(`${r.name}(无可用分支)`);
+      continue;
+    }
+    const pr = await run("git", ["push", "--force", `${host}:${LAN_MIRROR_DIR}/${r.name}.git`, `${src}:refs/heads/main`], {
+      cwd: r.dir,
+      timeout: PUSH_TIMEOUT_MS,
+      env: GIT_ENV(),
+    });
+    if (pr.code === 0) res.pushed.push(r.name);
+    else res.failed.push(`${r.name}(${(pr.stderr || "push 失败").trim().slice(0, 60)})`);
+  }
+  return res;
+}
+
+/** 内网同步入口：把配置仓库与全部 git 插件仓库推送到各内网主机镜像 */
+export async function lanPush(
+  ui: UiLike | null,
+  hosts: string[],
+  opts: { quiet?: boolean } = {},
+): Promise<LanHostResult[]> {
+  const cfg = loadConfig();
+  const results: LanHostResult[] = [];
+  for (const host of hosts) {
+    const r = await lanPushHost(cfg, host);
+    results.push(r);
+    if (r.skipped) {
+      if (!opts.quiet) ui?.notify(`pi-sync lan → ${host}：已跳过（${r.skipped}）`, "warning");
+      continue;
+    }
+    if (r.failed.length) {
+      ui?.notify(`pi-sync lan → ${host}：推送 ${r.pushed.length} 个；失败 ${r.failed.length}：${r.failed.join("，")}`, "warning");
+    } else if (!opts.quiet) {
+      ui?.notify(`pi-sync lan → ${host}：${r.pushed.length} 个仓库已推送到内网镜像（对端下次全新启动 pi 时自动安装/更新）`, "info");
+    }
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
 
@@ -1567,6 +2272,12 @@ async function statusText(cfg: SyncConfig): Promise<string> {
   if (!fs.existsSync(path.join(workDir(), ".git"))) return "pi-sync：未初始化，运行 /sync init";
   const lines: string[] = [];
   lines.push(`仓库: ${cfg.repo}（工作克隆 ${workDir()}）`);
+  const selfDir = selfSourceDir(cfg);
+  if (selfDir) lines.push(`配置包实际目录: ${selfDir}`);
+  if (selfDir) {
+    const dirty = await selfGit(selfDir, ["status", "--porcelain", "--", ...selfSourcePaths(selfDir)]);
+    lines.push(`配置包源码: ${dirty.stdout.trim() ? "有未提交改动，下次同步自动提交" : "干净"}`);
+  }
   const pending = loadPending();
   // 本机待推送
   const excluded = excludedKeys(cfg);
@@ -1608,40 +2319,8 @@ async function statusText(cfg: SyncConfig): Promise<string> {
     .join("；");
   if (machines) lines.push(`机器: ${machines}`);
   if (pending.size > 0) lines.push(`⚠️ ${pending.size} 项冲突待解决（运行 /sync）`);
-  lines.push(`自动同步: ${cfg.enabled && cfg.autoSync ? "开" : "关"}`);
+  lines.push(`同步开关: ${cfg.enabled ? "开" : "关"}（手动 /sync 或 pi update --extensions；开关 pi 不自动同步）`);
   return lines.join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// 自动同步
-// ---------------------------------------------------------------------------
-
-let autoRunning = false;
-
-async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promise<void> {
-  if (autoRunning) return;
-  autoRunning = true;
-  try {
-    const result = await runSync(ui, { push, interactive: false, materialize: true });
-    const interesting =
-      result.notes.length > 0 || result.errors.length > 0 || result.conflictsPending > 0;
-    if (!interesting || !ui) return;
-    if (result.errors.length > 0) {
-      ui.notify(`pi-sync（${reason}）：${result.errors[0]}`, "warning");
-      return;
-    }
-    const parts: string[] = [];
-    if (result.notes.length) parts.push(result.notes.slice(0, 6).join("；"));
-    if (result.conflictsPending) parts.push(`${result.conflictsPending} 项冲突待 /sync 处理`);
-    if (result.changedLocal) parts.push("配置已更新，/reload 后生效");
-    if (parts.length) ui.notify(`pi-sync：${parts.join("；")}`, "info");
-  } catch (e) {
-    try {
-      ui?.notify(`pi-sync（${reason}）失败: ${(e as Error).message}`, "warning");
-    } catch {}
-  } finally {
-    autoRunning = false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1651,7 +2330,7 @@ async function autoRun(ui: UiLike | null, reason: string, push: boolean): Promis
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("sync", {
     description:
-      "多机配置同步：/sync [push|pull|status|on|off] 或 /sync init [repo] [--mode=remote|local]",
+      "多机配置同步：/sync [push|pull|status|on|off|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
     handler: async (args, ctx) => {
       const ui: UiLike = ctx.ui;
       const [sub, ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
@@ -1704,10 +2383,24 @@ export default function (pi: ExtensionAPI) {
         const live = (readJson(liveP) ?? {}) as Side;
         const sync = ((live.sync as Side | undefined) ?? {}) as Side;
         sync.enabled = sub === "on";
-        if (sub === "on") sync.autoSync = true;
         live.sync = sync;
         writeJson(liveP, live);
-        ui.notify(`pi-sync 已${sub === "on" ? "开启（含自动同步）" : "关闭自动同步"}`, "info");
+        ui.notify(`pi-sync 已${sub === "on" ? "开启" : "关闭"}（由 /sync 或 pi update --extensions 手动触发；开关 pi 不再自动同步）`, "info");
+        return;
+      }
+
+      if (sub === "install-update") {
+        const scriptsDir = selfScriptsDir(cfg);
+        const script = scriptsDir ? path.join(scriptsDir, "pi-sync-cli.mjs") : null;
+        if (!script || !fs.existsSync(script)) {
+          ui.notify("找不到 scripts/pi-sync-cli.mjs（配置包未正确安装）", "error");
+          return;
+        }
+        ui.notify("pi-sync：安装本机更新入口（pi update --extensions 先完整同步）…", "info");
+        const r = await run(process.execPath, [script, "install"], { timeout: 60_000 });
+        const out = (r.stdout || "").trim().split("\n").filter(Boolean).slice(0, 3).join("；");
+        if (r.code === 0) ui.notify(`pi-sync install-update 完成${out ? "：" + out : ""}`, "info");
+        else ui.notify(`pi-sync install-update 失败：${(r.stderr || r.stdout).trim().slice(0, 160)}`, "error");
         return;
       }
 
@@ -1717,6 +2410,46 @@ export default function (pi: ExtensionAPI) {
           return;
         }
         ui.notify(await statusText(cfg), "info");
+        return;
+      }
+
+      if (sub === "lan" || sub === "mirror") {
+        const target = rest.find((a) => !a.startsWith("--"));
+        if (target === "off") {
+          const liveP = liveSettingsPath();
+          const live = (readJson(liveP) ?? {}) as Side;
+          const sync = ((live.sync as Side | undefined) ?? {}) as Side;
+          sync.lanHosts = [];
+          live.sync = sync;
+          writeJson(liveP, live);
+          ui.notify("pi-sync：已清空内网镜像主机（/sync lan 手动转发已无目标）", "info");
+          return;
+        }
+        if (!cfg.repo) {
+          ui.notify("pi-sync 未初始化，运行 /sync init", "warning");
+          return;
+        }
+        let hosts = cfg.lanHosts;
+        if (target) {
+          hosts = [target];
+          if (!cfg.lanHosts.includes(target)) {
+            const liveP = liveSettingsPath();
+            const live = (readJson(liveP) ?? {}) as Side;
+            const sync = ((live.sync as Side | undefined) ?? {}) as Side;
+            sync.lanHosts = [...cfg.lanHosts, target];
+            live.sync = sync;
+            writeJson(liveP, live);
+            ui.notify(`pi-sync：已记住内网主机 ${target}，之后 /sync lan（不带参数）即手动转发内网镜像`, "info");
+          }
+        }
+        if (!hosts.length) {
+          ui.notify("用法: /sync lan <ssh主机>（~/.ssh/config 里的 Host 别名，如 v2x）；/sync lan off 清空主机", "warning");
+          return;
+        }
+        ui.notify(`pi-sync：同步中，完成后转发内网镜像（${hosts.join(", ")}）…`, "info");
+        const r0 = await runSync(ui, { push: true, interactive: ctx.hasUI, materialize: true });
+        if (r0.errors.length) ui.notify(`pi-sync 同步阶段警告：${r0.errors.join("；")}`, "warning");
+        await lanPush(ui, hosts);
         return;
       }
 
@@ -1736,30 +2469,57 @@ export default function (pi: ExtensionAPI) {
         if (result.conflictsResolved) parts.push(`解决了 ${result.conflictsResolved} 项冲突`);
         if (result.conflictsPending) parts.push(`${result.conflictsPending} 项冲突仍挂起`);
         if (push) parts.push(result.pushed ? "已推送" : "未推送");
-        if (result.changedLocal) parts.push("配置已更新，/reload 后生效");
+        if (result.changedLocal) parts.push("配置/扩展已更新，重启 pi 后生效");
         ui.notify(parts.length ? `pi-sync：${parts.join("；")}` : "pi-sync：已是最新", "info");
         return;
       }
 
-      ui.notify("用法: /sync [push|pull|status|on|off] 或 /sync init [repo] [--mode=remote|local]", "warning");
+      ui.notify(
+        "用法: /sync [push|pull|status|on|off|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
+        "warning",
+      );
     },
   });
 
-  pi.on("session_start", async (event, ctx) => {
-    if (event.reason !== "startup") return;
-    const cfg = loadConfig();
-    if (!cfg.enabled || !cfg.autoSync || !cfg.repo) return;
-    const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
-    // 后台执行，不阻塞启动
-    void autoRun(ui, "启动同步", true);
-  });
-
-  pi.on("session_shutdown", async (event, ctx) => {
-    if (event.reason !== "quit") return;
-    const cfg = loadConfig();
-    if (!cfg.enabled || !cfg.autoSync || !cfg.repo) return;
-    if (!fs.existsSync(path.join(workDir(), ".git"))) return;
-    const ui: UiLike | null = ctx.hasUI ? ctx.ui : null;
-    await Promise.race([autoRun(ui, "退出同步", true), new Promise((r) => setTimeout(r, 20_000))]);
-  });
 }
+
+// ---------------------------------------------------------------------------
+// CLI 直接执行入口（node extensions/pi-sync.ts --run，或 env PI_SYNC_CLI=1）
+// 仅当本文件是入口脚本时触发；被 pi 作为扩展 import 时不运行、不注册钩子。
+// 复用 runSync 完整流程（phase1→commit→fetch→phase2→applyToLive→物化→卸载对账→push→包源码）。
+// ---------------------------------------------------------------------------
+
+async function cliMain(): Promise<void> {
+  const log = (msg: string): void => console.log(`[pi-sync] ${msg}`);
+  const cfg = loadConfig();
+  if (!cfg.enabled) {
+    log("sync.enabled=false，跳过同步");
+    return;
+  }
+  if (!cfg.repo) {
+    console.error("[pi-sync] 未配置同步仓库，请先在 pi 内运行 /sync init");
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const result = await runSync(null, { push: true, interactive: false, materialize: true });
+    for (const n of result.notes) log(n);
+    if (result.conflictsResolved) log(`解决了 ${result.conflictsResolved} 项冲突`);
+    if (result.conflictsPending) log(`⚠️ ${result.conflictsPending} 项冲突非交互跳过（本机改动保留，需在 pi 内 /sync 解决）`);
+    if (result.errors.length) {
+      for (const e of result.errors) console.error(`[pi-sync] 错误: ${e}`);
+      process.exitCode = 1;
+      return;
+    }
+    log(result.pushed ? "同步完成，已推送" : "同步完成（无需推送）");
+  } catch (e) {
+    console.error(`[pi-sync] 同步失败: ${(e as Error).message}`);
+    process.exitCode = 1;
+  }
+}
+
+const invokedDirectly =
+  typeof process.argv[1] === "string" &&
+  path.basename(process.argv[1]) === "pi-sync.ts" &&
+  (process.argv.includes("--run") || process.env.PI_SYNC_CLI === "1");
+if (invokedDirectly) void cliMain();

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "qwen-token-plan-individual-cn": {
+      "models": [
+        {
+          "id": "qwen4-max",
+          "name": "Qwen4 Max",
+          "api": "openai-completions",
+          "baseUrl": "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 1000000,
+          "maxTokens": 262144,
+          "compat": {
+            "supportsStrictMode": true,
+            "thinkingFormat": "qwen",
+            "supportsDeveloperRole": false,
+            "supportsStore": false,
+            "supportsReasoningEffort": true
+          },
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": "minimal",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "xhigh",
+            "max": "max"
+          },
+          "inputLimits": {
+            "images": {
+              "resize": {
+                "maxWidth": 2000,
+                "maxHeight": 2000,
+                "maxBytes": 4718592,
+                "jpegQuality": 80
+              }
+            }
+          }
+        }
+      ]
+    },
+    "strata-local": {
+      "name": "Strata Local (无审查)",
+      "baseUrl": "http://127.0.0.1:8081/v1",
+      "apiKey": "local",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "orcarouter-qwen3.8-flash-next-uncensored-iq3_xxs",
+          "name": "Orca Uncensored IQ3_XXS (本地 512K)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 524288,
+          "maxTokens": 65536,
+          "compat": {
+            "supportsStrictMode": false,
+            "thinkingFormat": "chat-template",
+            "chatTemplateKwargs": {
+              "enable_thinking": "$thinking.enabled",
+              "reasoning_effort": "$thinking.effort"
+            },
+            "supportsDeveloperRole": false,
+            "supportsStore": false,
+            "supportsReasoningEffort": true
+          },
+          "thinkingLevelMap": {
+            "off": "off",
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "xhigh",
+            "xhigh": "xhigh",
+            "max": "xhigh"
+          }
+        }
+      ]
+    }
+  }
+}
