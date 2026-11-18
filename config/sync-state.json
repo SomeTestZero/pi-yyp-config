@@ -2,7 +2,7 @@
   "version": 1,
   "machines": {
     "yyp-home-pc": {
-      "lastSeen": "2026-11-16T10:57:13.627Z"
+      "lastSeen": "2026-11-18T07:35:01.307Z"
     },
     "NEU-20230908KJS": {
       "lastSeen": "2026-11-13T08:39:09.168Z"
@@ -122,7 +122,11 @@
       "machine": "yyp-home-pc"
     },
     "config/pi/agent/models.json": {
-      "ts": 1794814316414,
+      "ts": 1794987301288,
+      "machine": "yyp-home-pc"
+    },
+    "config/pi/agent/extensions/strata-video.ts": {
+      "ts": 1794987301288,
       "machine": "yyp-home-pc"
     }
   },
@@ -185,12 +189,6 @@
       "type": "package",
       "id": "npm:pi-codebuddy-oauth",
       "ts": 1794640955284,
-      "machine": "yyp-home-pc"
-    },
-    {
-      "type": "file",
-      "id": "config/pi/agent/models.json",
-      "ts": 1793599613499,
       "machine": "yyp-home-pc"
     },
     {
@@ -317,7 +315,8 @@
         "config/pi/agent/extensions/relays.auto.json": 1792047273181,
         "config/pi/agent/extensions/relays.json": 1792047273181,
         "config/pi/agent/models.json": 1792322058869,
-        "config/pi/agent/extensions/image-budget.ts": 1792588807139
+        "config/pi/agent/extensions/image-budget.ts": 1792588807139,
+        "config/pi/agent/extensions/strata-video.ts": 1794987301288
       },
       "NEU-20230908KJS": {
         "config/pi/agent/keybindings.json": 1791942551608,
