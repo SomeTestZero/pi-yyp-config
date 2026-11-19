@@ -2,142 +2,107 @@
 
 yyp 的个人 pi 配置仓库：**一个 GitHub 私有仓库同步所有 pi 配置**，多机一处维护。
 
-本仓库同时是：
+## 架构（v2，2026-11-19 起）
 
-1. **pi 包**（`extensions/` 下的扩展通过 pi 包机制分发，含同步扩展 `pi-sync`）
-2. **配置备份库**（`config/` 下存放各机共享的配置快照与合并元数据）
+双通道 + 单写者 + 服务端围栏，根治旧版「旧客户端整树提交静默回退远端源码」的设计缺陷：
+
+| 通道 | 分支 | 内容 | 写者 | 保护 |
+|---|---|---|---|---|
+| 源码 | `main` | 引擎与包源码（extensions/scripts/skills/…），**不含 config/** | 仅主力机（分支 → PR → 合并） | GitHub ruleset：禁直推/强推/删除 |
+| 配置 | `sync`（孤儿分支） | `config/`（settings/keybindings/models/扩展副本/sync-state）+ `SYNC-PROTOCOL.json` | 所有机器（三方合并 + 墓碑） | 无（数据通道，可重建） |
+
+关键性质：
+
+- **包克隆永远干净**：同步逻辑不向包克隆提交任何东西，`pi update --extensions` 永远是纯 fast-forward。
+  旧机器因此能自动升级到新引擎——「坏合并逻辑无法自愈」的死锁不复存在。
+- **旧客户端推 main 会被 ruleset 直接拒绝**（响亮失败，不再静默破坏）。
+- **同步失败不阻塞包更新**：包装脚本 warn-and-continue，源码通道永远可更新。
+- **零 token 依赖**：日常同步全是 SSH git。源码推送默认「推分支 + 网页合并 PR」；
+  可选放一个 fine-grained PAT 到 `~/.pi/agent/pi-sync-github-token`（仅本仓库，
+  Contents/Pull requests/Administration 读写）升级为全自动 PR 合并 + ruleset API 创建。
+  该文件本机私有，永不参与同步。
 
 ## 快速上手
 
-### 新机器接入（一键）
+### 新机器接入
 
 ```bash
 pi install git:git@github.com:SomeTestZero/pi-yyp-config
 pi          # 启动后执行：
 /sync init git@github.com:SomeTestZero/pi-yyp-config.git --mode=remote
+/sync install-update    # 装本机入口（一次性）
 ```
 
-`--mode=remote` 表示以远端为准（推荐新机器）；在配置最全的主力机上首次建仓用 `--mode=local`。
-
-### 日常：一条更新命令
-
-每台机器安装一次本机入口（不修改 pi 自身安装文件）：
+之后日常只需：
 
 ```bash
-# 在 pi 会话内执行
-/sync install-update
+pi update --extensions   # 先完整同步（sync 分支），再 ff 更新所有包
 ```
 
-新开终端后只需：
+### 主力机
+
+- 改配置后：`/sync push`（或 `pi update --extensions`）。
+- 改源码后：同样 `/sync push` —— 自动提交到 `src/<机器>-<时间戳>` 分支并推送，
+  无 token 时给出 PR 链接（网页点两下合并）；有 token 时自动建 PR 并合并。
+- 合并后其他机器下次 `pi update --extensions` 自动拿到新源码。
+
+### 一次性迁移（已完成，留档）
 
 ```bash
-pi update --extensions
+node scripts/pi-sync-cli.mjs migrate-v2          # 播种 sync 分支 + main 移除 config/
+node scripts/pi-sync-cli.mjs migrate-v2 --fence  # 启用 main ruleset（无 token 时给网页步骤）
 ```
 
-它会先完整同步配置、实际加载的包源码和本地扩展，**并卸载清单中已移除的包**（pi 核心更新只补装不卸载，卸载对账由 pi-sync 完成），再调用真正的 pi 更新其他包。同步失败或源码冲突时停止更新，不静默覆盖本机改动。更新完成后重启 pi。
+其他机器无需手动干预：`pi update` 快进到新引擎后自动切换配置通道。
 
-- **主力机改完配置/插件** → 主动 `/sync push`（或 `pi update --extensions`）推送；开关 pi 本身不再触发任何同步
-- **其他机对齐** → 装过一次 `/sync install-update` 后，只跑 `pi update --extensions` 即完整同步 + 卸载对账 + 更新
-- **两机改了同一配置键** → 下次 `/sync` 弹窗选择；非交互（CLI/包装）下冲突挂起跳过、保留本机改动，源码 Git 冲突会明确提示并停止
-- **`/sync status`** → 查看配置包实际目录、未提交源码和远端差异
-- **不想包装命令时** → 仍可直接 `/sync`；它提供交互式冲突处理
+### 掉队旧机器恢复（围栏启用后）
 
-### 命令
-
-| 命令 | 作用 |
-| --- | --- |
-| `/sync` | 一键同步：拉取 → 合并 → 推送（交互解决冲突） |
-| `/sync status` | 查看本机与远端差异、待解决冲突、机器列表 |
-| `/sync push` / `/sync pull` | 单向操作 |
-| `/sync on` / `/sync off` | 开关本机同步（enabled）；同步仅由 /sync 或 pi update --extensions 手动触发 |
-| `/sync install-update` | 安装本机入口：`pi update --extensions` 先完整同步（含卸载对账）再更新其他包；不销毁 pi 自带启动器（会先备份成 `~/.pi/agent/bin/pi.pi-real`） |
-| `/sync lan <ssh主机>` | 内网同步：推送到指定主机的 `~/pi-mirror` 镜像并记住，之后 `/sync lan`（不带参数）手动转发 |
-| `/sync lan off` | 清空内网镜像主机 |
-
-### 更新入口与插件远端（2026-11-17 修复）
-
-- **pi 启动卡死**：pi 的托管安装自己会在 `~/.pi/agent/bin/pi` 放「跟随 `install/current-version`」的启动器，并把 `~/.local/bin/pi` 软链到它。旧版安装器覆盖该启动器后，又从 `which -a pi` 里挑中「软链回包装」的 `~/.local/bin/pi` 当真实 pi → 包装 `exec` 自己，启动 pi 即 100% CPU 死循环。现在安装器按 realpath 排除包装自身与指向包装的软链、备份 pi 启动器、用 `--version` 冒烟测试后才落盘，包装运行时也带自递归保护与多级回退。修好后重跑 `/sync install-update` 即可。
-- **`pi update --extensions` 里 https 插件拉不动**：pi 更新已装 git 插件时直接在旧克隆里 `git fetch origin`，早期用 `git:github.com/...`（无 scheme，pi 解析成 https）装的包远端会一直是 `https://github.com/...`。现在每次同步前自动把 `~/.pi/agent/git/**` 里 GitHub 的 https 远端改成 `git@github.com:...`（可单独执行 `node scripts/pi-sync-cli.mjs fix-remotes`，临时关闭用 `PI_SYNC_SKIP_REMOTE_FIX=1`）。
-
-## 内网机器（无外网）
-
-`/sync lan v2x`（`v2x` 为 `~/.ssh/config` 中的 Host 别名）把**配置同步仓库 + 所有已安装 git 插件仓库**推送到该主机的本地 git 镜像，自动完成：
-
-- 目标机建 `~/pi-mirror/<name>.git` 裸仓库 + 无 `.git` 后缀软链（兼容两种 URL 写法）
-- 目标机配 `url."$HOME/pi-mirror/".insteadOf`，把 `https://github.com/<org>/`、`git@github.com:<org>/` 透明重写到本地镜像 → 目标机 `pi install` / `pi update --extensions` 全程离线
-
-内网机一次性准备：
+旧引擎 + 旧包装的机器会「同步推 main 被拒 → 旧包装中止更新」卡住。恢复只需绕过包装直接更新一次：
 
 ```bash
-pi install git:git@github.com:SomeTestZero/pi-yyp-config   # 会被 insteadOf 重写到镜像
-# settings.json 设（sync 键本机有效，不参与同步）：
-#   "sync": { "repo": "/home/<用户>/pi-mirror/pi-yyp-config.git",
-#             "excludeKeys": ["defaultProvider","defaultModel"] }
-pi                        # 启动后 /sync（或 pi update --extensions）拉取合并，补齐全部插件/配置
+~/.pi/agent/bin/pi.pi-real update --extensions   # Linux/macOS
+pi.cmd update --extensions                        # Windows（绕过 PowerShell profile 包装）
 ```
 
-注意：`npm:` 来源的包无法离线安装，把主力机 `~/.pi/agent/npm/` 整目录拷到内网机同路径即可；`auth.json` 按设计永不同步，内网机用 `/infcode-connect` 共享主力机登录态。主力机不在内网时 `/sync lan` 转发自动静默跳过。
+更新到新引擎后一切自动恢复正常。
 
-## 同步范围
+## 同步语义
 
-| 内容 | 位置 | 方式 |
-| --- | --- | --- |
-| 包资源（extensions/skills/prompts/themes/docs/scripts） | 实际安装目录 ↔ 仓库根目录各目录 | `/sync` 自动提交、rebase、推送；同时兼容无 `.git` 后缀安装目录 |
-| 全局设置 | `~/.pi/agent/settings.json` ↔ `config/pi/agent/settings.json` | pi-sync 扩展（顶层键级三方合并） |
-| 已安装插件清单 | settings.json 的 `packages` 数组 | 并集合并；目标机自动 `pi install` 补装，并按 accepted/墓碑候选卸载已移除的包 |
-| 键位绑定 | `keybindings.json` | pi-sync 扩展 |
-| 模型配置 | `~/.pi/agent/models.json` ↔ `config/pi/agent/models.json` | pi-sync 扩展（整文件三方合并） |
-| 本地扩展源码 | `~/.pi/agent/extensions/` ↔ `config/pi/agent/extensions/` | pi-sync 扩展（文件级三方合并） |
+- settings.json：顶层键级三方合并，packages 并集，排除键不同步（`sync.excludeKeys` +
+  顶层 `syncExcludeKeys`，由 pi-sync-guard 分发）；`defaultProvider`/`defaultModel` 永远本机。
+- keybindings.json / models.json：整文件三方合并。
+- `~/.pi/agent/extensions/` 松散扩展文件：文件级三方合并（node_modules 除外；
+  pi-sync.ts 本体不走文件同步，只走包源码通道，避免双份加载）。
+- 删除通过墓碑（tombstone）传播；包卸载按 accepted/墓碑候选精确对账。
+- 冲突：交互模式弹窗选择，自动模式跳过并挂起（`pi-sync-pending.json`）。
+- 配置通道协议版本：`SYNC-PROTOCOL.json`，远端协议更新时拒绝写入并提示升级。
 
-**合并语义**：packages 按并集收敛；同包不同版本按最后同步者胜（LWW）；删除通过墓碑传播，但仅当删除方机器**曾拥有**该包/键/文件（`accepted` 记账，v1.3 起）才传播——「从远端合并进树但尚未安装/落盘」不会被误判为删除。
+## 命令一览
 
-## 请求体防爆（image-budget）
-
-10-21 起随仓库分发 `config/pi/agent/extensions/image-budget.ts`：在 `context` 事件里给**每轮请求的图片**设硬上限（历史窗口 4 张 + 24MB 预算，最近读的图优先保留），根治 DeepSeek 的 `413 Request Entity Too Large` / `550`。配套 `config/pi/agent/models.json` 把单图编码压到 `1600px / 1.5MB / q82`，一张 12MB 的 4096 PNG 读进会话只存 0.22MB。
-
-- 自查：`/imgbudget`；调试：`PI_IMAGE_BUDGET_DEBUG=1`；关闭：`PI_IMAGE_BUDGET_OFF=1`
-- 根因、实测边界（45.3MB 通 / 49.3MB 挂 / 官方 48 MiB）、DeepSeek 视觉侧限制（约 1300×1300 网格、1024 token/图）与验证记录 → **[docs/image-budget.md](docs/image-budget.md)**
-
-## WorkBuddy 模型（CN / Intl 双 Provider）
-
-`extensions/workbuddy.ts` 把 WorkBuddy 订阅接成 pi 原生 provider，不需要 WorkBuddy 桌面端、不再跑本地反代：
-
-- `/login workbuddy-cn` → 登录 **WorkBuddy CN（国内版）**；`/login workbuddy-intl` → 登录 **WorkBuddy Intl（国际版）**。两站 OAuth 凭据互相隔离，每台机器各登录一次（`auth.json` 永不同步），之后自动刷新令牌。
-- `/model` 分别显示 `workbuddy-cn/...`、`workbuddy-intl/...`；目录直接读上游 `/v2/enterprises/personal/models`，模型名后的 `(0.69x)` 是积分倍率。
-- `/thinking` 控制 `reasoning_effort`；footer 按站点显示本次会话已用积分（`WorkBuddy CN / Intl 1.23 cr`）。`/wb`、`/wb intl` 查看模型与积分；加 `refresh` 强制刷新目录。
-- **积分包含主代理和所有子代理**：真实 `usage.credit` 按请求成功结束时计一次，重复 usage 不重复累计；主子进程通过本地小文件账本共享，支持并行、递归、超时后 resume，CN/Intl 分开。账本只存积分，不存请求、回答或凭据，位于会话目录 `.workbuddy-credits/<run-id>/`；主会话 `/reload` 保留账本，子代理 resume 继承主会话账本。
-- 离线回归：`node --experimental-strip-types scripts/test-wb-credits.mjs`（假响应、主子并行、resume 与 usage 去重，不访问真实服务）。
-- 非官方客户端，属灰色用法（订阅协议只覆盖 WorkBuddy/CodeBuddy 自家产品），账号风险自担；合规路径是 Coding Plan / Token Plan 的 API Key。
-
-## 模型选择（`/models` / alt+m）
-
-`extensions/model-tree.ts` 把扁平模型列表改成两级树：先选 provider（带模型数和当前 provider 标记），再选该 provider 的模型（带上下文 / 输出上限 / thinking / image 能力），选完即切换，并可顺手选「保存为默认模型」——扩展 API 的 `pi.setModel()` 只切当前会话，所以保存直接写本机 `~/.pi/agent/settings.json` 的 `defaultProvider`/`defaultModel`（这两键在 `sync.excludeKeys` 里，属机器本地偏好，不参与同步）。内置 `/model` 保持不变，`/model provider/id` 仍可直接跳。
-
-**永不同步**：`auth.json`（凭证）、`web-search.json`（可能含搜索 API key，可用 `sync.includeFiles` 显式加回）、`trust.json`、`sessions/`、`models-store.json`（模型目录缓存，注意与同步的 `models.json` 区分）、`npm/`、`git/`（后两者是 packages 清单的派生产物，不入库）。
-机器相关设置键（`httpProxy`、`shellPath`、`npmCommand`、`sessionDir`、`externalEditor` 等）自动排除，可用 `sync.excludeKeys` 追加。
-
-## 配置
-
-`~/.pi/agent/settings.json`（`sync` 键本机有效，不参与同步）：
-
-```jsonc
-{
-  "sync": {
-    "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
-    "enabled": true,     // 总开关（关闭后 /sync 与 CLI 均跳过）
-    "autoSync": true,    // 兼容旧配置保留解析；已无钩子消费，开关 pi 不再自动同步
-    "excludeKeys": [],   // 额外排除的 settings 键
-    "includeFiles": [],  // 额外纳入的文件，如 ["web-search.json"]
-    "lanHosts": []       // 内网镜像主机（ssh 别名），/sync lan 手动转发
-  }
-}
+```
+/sync                 一键同步（拉取→合并→落地→补装→卸载对账→推送）
+/sync push | pull | status | on | off
+/sync init [repo] [--mode=remote|local]
+/sync install-update  安装本机更新入口（包装 pi update --extensions）
+/sync migrate-v2 [--fence]   一次性迁移 / 启用 main 保护
+/sync lan <ssh主机>   内网镜像同步（注意：镜像需包含 sync 分支，见下）
 ```
 
-## 安全须知
+CLI：`node scripts/pi-sync-cli.mjs <sync|install|fix-remotes|migrate-v2 [--fence]>`
 
-- **仓库必须保持私有**。配置快照中虽不含 auth.json，但包含可执行的扩展代码——有仓库写权限等于能在所有机器上执行代码。
-- git 认证复用系统 SSH key，扩展不接触任何 token。
+## 已知边界
 
-## 旧脚本
+- `/sync lan` 内网镜像：v2 后配置数据在 sync 分支，镜像转发需同时携带 main 与 sync
+  两个分支（旧镜像只有 main 时，消费端会提示「配置通道尚未迁移」并仅更新源码）。
+- 源码单写者是约定 + 围栏（main 只走 PR），不是技术强制；多台主力机同时推源码 PR
+  可能互相冲突，后合并者需 rebase（pi-sync 会保留分支现场并提示）。
+- fine-grained PAT（若使用）最长一年过期；过期只影响「自动合并 PR」，
+  日常同步与源码拉取不受影响，删掉 token 文件即回到零 token 手动模式。
 
-`scripts/pi-sync`（bash/ps1）是 v0 方案，已被 pi-sync 扩展取代，保留一个版本周期后移除。
+## 历史教训（为什么是 v2）
+
+v1 时代所有机器向 main 整树提交，旧客户端合并时保留自己的旧树 → 远端源码被静默回退
+（2026-11-19 gxy 事故：pi-sync.ts 退回旧版、workbuddy/model-tree/CLI/REA skill 被删）。
+且引擎经被合并通道分发，坏逻辑永远无法自愈。v1.5 的 commitMerge（read-tree 远端整树 +
+覆盖 config/）只修好了新客户端；v2 用「源码/配置分通道 + main 单写者 + 服务端 ruleset」
+把整类 bug 根治，并让旧机器经纯 ff 的源码通道自动收敛。
