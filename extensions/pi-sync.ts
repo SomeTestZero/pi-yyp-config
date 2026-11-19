@@ -177,6 +177,8 @@ export interface SyncConfig {
   includeFiles: string[];
   lanHosts: string[];
   branch?: string;
+  /** 本机是否源码写者（主力机）；迁移时自动置 true。sync 键本机私有，不参与同步 */
+  sourcePush?: boolean;
 }
 
 export interface RunOptions {
@@ -525,6 +527,7 @@ export function loadConfig(): SyncConfig {
       ? (s!.lanHosts as unknown[]).filter((x): x is string => typeof x === "string" && x.length > 0)
       : [],
     branch: typeof s?.branch === "string" ? s.branch : undefined,
+    sourcePush: s?.sourcePush === true,
   };
 }
 
@@ -1746,7 +1749,8 @@ async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean)
   }
   const token = readGithubToken();
   if (dirty.stdout.trim()) {
-    if (token && push) {
+    if (push && (token || cfg.sourcePush)) {
+      // 主力机：有 token 自动合并 PR，无 token 推分支 + PR 链接手动合并
       await pushSourceViaPR(cfg, dir, sourcePaths, result);
     } else {
       // 消费机（或 pull-only）：备份本地源码改动到本地分支，永不推送
@@ -2069,6 +2073,13 @@ export async function performMigrateV2(ui: UiLike | null, fenceOnly: boolean): P
     if (fenced) await selfGit(dir, ["push", "origin", "--delete", tmp], PUSH_TIMEOUT_MS);
     log("main 源码已更新（config/ 已移除）");
   }
+  // 本机标记为源码写者（主力机）；sync 键本机私有，不会扩散到其他机器
+  const liveP = liveSettingsPath();
+  const live = (readJson(liveP) ?? {}) as Side;
+  const syncSide = ((live.sync as Side | undefined) ?? {}) as Side;
+  syncSide.sourcePush = true;
+  live.sync = syncSide;
+  writeJson(liveP, live);
   return { ok: true, message: "迁移完成：sync 配置通道就绪，其他机器 pi update 后自动收敛；确认收敛后运行 migrate-v2 --fence 启用 main 保护" };
 }
 
