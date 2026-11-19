@@ -1,0 +1,177 @@
+{
+  // relay-autosync.ts 的站点配置。每个站点一段，支持 // 注释。
+  // 新增中转站：复制一段，改 id / baseUrl / apiKey 即可，模型清单会自动同步。
+  "providers": [
+    {
+      // Token 秘密花园：https://token.mmh1.top （文档见飞书《Token 秘密花园》）
+      "id": "token-garden",
+      "name": "Token 秘密花园",
+      // 统一走 API 域名：控制台域名 token.mmh1.top 在境内 DNS 被污染（解析到
+      // Twitter/Meta 的 IP），拿它当 baseUrl 时 GET /models 必然超时，模型清单
+      // 只能退回手写的 fallbackModels（← gpt-6-astra 缺失的真正原因）。
+      // api.mmh1.top 实测 OpenAI / Anthropic 两种协议都通，模型清单也全。
+      "baseUrl": "https://api.mmh1.top/v1",
+      "apiKey": "$TOKEN_GARDEN_API_KEY",
+
+      // 平台文档的 SDK 示例统一带这个 UA，照做以兼容其风控
+      "headers": { "User-Agent": "curl/8.0" },
+
+      // 平台规定 claude 系列只能走 /v1/messages（Anthropic 协议）
+      "anthropicMessages": ["^claude-"],
+
+      // ⚠️ 两种协议的 baseUrl 约定不同（pi-ai 直接把 baseUrl 交给 SDK 当 baseURL）：
+      //   - OpenAI 协议：SDK 拼 /chat/completions，所以 baseUrl 要带 /v1 → …/v1/chat/completions
+      //   - Anthropic 协议：SDK 自己拼 /v1/messages，baseUrl 不能带 /v1
+      // 否则 claude 系列会打到 /v1/v1/messages，报 404 "Invalid URL (POST /v1/v1/messages)"。
+      // 这里用 baseUrlRules 给 claude 系列单独换不带 /v1 的根地址。
+      "baseUrlRules": { "^claude-": "https://api.mmh1.top" },
+
+      // 生图模型（gpt-image-*）不是对话模型，排除出 /model 列表
+      "exclude": ["^gpt-image"],
+
+      // 已知模型的精调参数（云端同步后仍生效，按 id 匹配）。
+      // 上下文/输出上限取自各家官方规格；思考档位按上游实测的合法枚举写死——
+      // 同一模型在不同站点能接受的档位不同（例：本站 gpt-5.5 不收 minimal/max）。
+      // thinkingLevelMap：字符串=映射后发给上游，null=该档上游不认（pi 里不显示）。
+      "models": {
+        // ── GPT 系：1.05M 上下文、128K 输出 ──
+        // 上游档位：none(关思考) / low / medium / high / xhigh / max；minimal 直接 400。
+        //
+        // ✅ effort 实测**生效**，但有个坑：只在“题目真需要算”时才能看出梯度。
+        //    同一道组合题（直接召回型）六档都没量在 1000 上下，看不出差异；换一道
+        //    需要搜索计算的题（1e6 以上找孪生素数）后：
+        //      none  291 / 2035 reasoning_tokens
+        //      max  2159 / 2463 / 2474 reasoning_tokens
+        //    结论：别拿容易题去验证档位，会误判为“无效”。
+        //
+        // ⚠️ 两个反直觉点：
+        //  1) none ≠ 完全不思考。它只是“不额外加预算”，同题两次 291 vs 2035，
+        //     高的时候几乎追平 max。要真关思考，只有 Claude 走 Anthropic 路由
+        //     发 thinking:{type:"disabled"} 可靠（且 sonnet-5/opus-5 连这个都拒）。
+        //  2) reasoning_content 是**标题式摘要**，不是完整思考。实测 max 档 2474
+        //     reasoning_tokens 只回 95 字符（如 "**Checking candidate primality
+        //     manually****Checking remaining divisors**"）。别按可见字数估成本。
+        //
+        // 上下限依据：GPT-6 代 1.05M/128K；5.6 代按下推；gpt-5.5 是上代（无 max 档）。
+        "gpt-6-astra":   { "name": "GPT-6 Astra",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // gpt-6-sol / gpt-6.1-sol / gpt-6.1-terra：云端当前清单里的在售型号，之前漏了眼。
+        // 同属 6 代，档位与 astra 一致；上下文/输出按 6 代规格。
+        "gpt-6-sol":     { "name": "GPT-6 Sol",     "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-6.1-sol":   { "name": "GPT-6.1 Sol",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-6.1-terra": { "name": "GPT-6.1 Terra", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-5.6-sol":   { "name": "GPT-5.6 Sol",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gpt-5.6-terra": { "name": "GPT-5.6 Terra", "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // ↓ 以下两个已从云端清单**下架**（实测 503 "No available channel"）。
+        //   保留配置 = 下架期间不显示（云端清单一覆盖就没了），重新上架后立即可用。
+        "gpt-5.6-luna":  { "name": "GPT-5.6 Luna",  "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // gpt-5.5 是上一代：没有 max 档
+        "gpt-5.5":       { "name": "GPT-5.5",       "reasoning": true, "input": ["text", "image"], "contextWindow": 1050000, "maxTokens": 128000,
+                           "thinkingLevelMap": { "off": "none", "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": null } },
+
+        // ── Claude：1M 上下文、128K 输出、adaptive thinking（用 effort 控档）──
+        // 实测输出块带真实 signature，所以不需要 allowEmptySignature。
+        // off = 发 thinking:{type:"disabled"}
+        //
+        // ⚠️ 5 代全部必须 forceAdaptiveThinking：上游收下旧式
+        //    thinking:{type:"enabled",budget_tokens:N} 时**不报错但完全不思考**
+        //    （实测 thinking_tokens=0、无 thinking 块）。不写这个字段 = 静默废掉思考。
+        //    只有 claude-haiku-5-5 例外，两种格式都认；统一走 adaptive 便于用 effort 控档。
+        //
+        // ⚠️ off 档判定规则：发 thinking:{type:"disabled"} 实测 400 的才写 off:null。
+        //    实测拒绝 disabled（400）：claude-opus-5、claude-sonnet-5、claude-sonnet-5-5
+        //    实测接受 disabled（200）：claude-opus-4-6/4-7/4-8、claude-opus-5-5、claude-haiku-5-5
+        "claude-opus-5-5": { "name": "Claude Opus 5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-sonnet-5-5": { "name": "Claude Sonnet 5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                               "compat": { "forceAdaptiveThinking": true },
+                               "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // haiku 的 1M/128K 是按 5 代同门规格外推的（未逐项实测）；宁可估大，
+        // 真溢出时由本插件的 OVERFLOW_PATTERN 钩子触发自动压缩重试兜底。
+        "claude-haiku-5-5": { "name": "Claude Haiku 5.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                              "compat": { "forceAdaptiveThinking": true },
+                              "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // claude-opus-4-6 故意不精调：4 代上游认旧式 budget_tokens（与 haiku 同类），
+        // guessMeta 给的 200K/32K 也符合 4 代真实规格。
+        "claude-opus-5":   { "name": "Claude Opus 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-opus-4-8": { "name": "Claude Opus 4.8", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-opus-4-7": { "name": "Claude Opus 4.7", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-sonnet-5": { "name": "Claude Sonnet 5", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                             "compat": { "forceAdaptiveThinking": true },
+                             "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-fable-5":   { "name": "Claude Fable 5",   "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                              "compat": { "forceAdaptiveThinking": true },
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "claude-fable-5-1": { "name": "Claude Fable 5.1", "reasoning": true, "input": ["text", "image"], "contextWindow": 1000000, "maxTokens": 128000,
+                              "compat": { "forceAdaptiveThinking": true },
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+
+        // ── Gemini：1M / 64K。关不掉思考，只能选强度（3.7/3.8 不收 off、none、minimal）──
+        // 档位梯度实测成立：同一题 low/medium/high/max 的 reasoning_tokens 明显递增，
+        // 且 xhigh / max 网关都接受（不受 support 列表限制），故全给到 max。
+        "gemini-3.7-flash": { "name": "Gemini 3.7 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        "gemini-3.8-flash": { "name": "Gemini 3.8 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
+                              "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+        // 3.6 已从云端清单消失，仅保留兜底条目，换站点/回滚时可用。
+        // 注意：它是唯一接受 minimal 的 Gemini（3.7/3.8 都拒），这点是当年设计意图，不改。
+        "gemini-3.6-flash": { "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536,
+                              "thinkingLevelMap": { "off": null, "minimal": "minimal", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } },
+
+        // ── Grok：500K 上下文，官方不设输出上限（这里给 128K 作为默认截断）──
+        // ⚠️ 已下架：云端 /v1/models 清单里已经没有 grok-4.6（实测 503 "No available channel"）。
+        // 保留配置只为重新上架时立即可用；下架期间云端清单覆盖后不会显示在 /model 里。
+        // 档位：当初在本站的实测记录是「OpenAI 路由忽略 reasoning_effort（无报错）」，
+        // 但该结论是在下架前测的、且未用“需计算”的题验证过，参考价值有限。
+        // 真要启用时请按上面的方法（难的题 + 看 reasoning_tokens）重新验证一遍。
+        "grok-4.6": { "name": "Grok 4.6", "reasoning": true, "input": ["text", "image"], "contextWindow": 500000, "maxTokens": 131072,
+                      "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh" } }
+      },
+
+      // 断网/未登录时的兜底清单（与云端 /v1/models 的对话模型保持一致，生图已排除）。
+      // 云端同步成功时会用上游结果覆盖；这里只保证「拉不到时也是对的」。
+      // 末尾几个已下架（标 ✗），保留只为重新上架时兜底 —— 排后面，拉不到云端时它们也不会被优先看到。
+      "fallbackModels": [
+        "gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra",
+        "gpt-5.6-sol", "gpt-5.6-terra",
+        "gemini-3.7-flash", "gemini-3.8-flash",
+        "claude-opus-5", "claude-opus-5-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+        "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+        "claude-fable-5-1", "claude-fable-5",
+        // ✗ 已下架（云端清单里没有，实测不可用）
+        "gpt-5.6-luna", "gpt-5.5", "gemini-3.6-flash", "grok-4.6"
+      ]
+    }
+
+    // 示例：内网 LLM 网关（http://10.105.1.5:4001/v1）
+    // 注意：现有 neu-llm-gateway.ts 已注册同 id provider。若要迁移到本插件，
+    // 请先删除 neu-llm-gateway.ts、把下面这段取消注释并改 "enabled": true。
+    // 迁移后模型清单随网关自动更新，无需再手改 neu-llm-gateway.ts 的 MODELS 数组。
+    // 该网关对部分模型的 thinking 参数有特殊要求（见 neu-llm-gateway.ts 顶部注释），
+    // 迁移前请确认其 /v1/models 可用、且相关模型的 thinking 配置已写入 "models"。
+    // {
+    //   "id": "neu-llm-gateway",
+    //   "name": "NEU LLM Gateway",
+    //   "enabled": false,
+    //   "baseUrl": "http://10.105.1.5:4001/v1",
+    //   "apiKey": "$LLM_GATEWAY_API_KEY",
+    //   "defaults": { "contextWindow": 262144, "maxTokens": 32768 },
+    //   "models": {
+    //     "qwen3.8-27b": { "name": "Qwen3.8 27B", "reasoning": true }
+    //   }
+    // }
+  ]
+}
