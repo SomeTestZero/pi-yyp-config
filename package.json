@@ -2,12 +2,23 @@
   "name": "pi-yyp-config",
   "version": "1.3.0",
   "description": "yyp's personal pi config: extensions, skills, prompts, themes",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"],
-    "prompts": ["./prompts"],
-    "themes": ["./themes"]
-  }
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  },
+  "type": "module"
 }

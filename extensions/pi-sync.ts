@@ -6,15 +6,26 @@
  *   - keybindings.json（整文件三方合并）
  *   - models.json（整文件三方合并）
  *   - ~/.pi/agent/extensions/ 本地扩展文件（文件级三方合并，node_modules 除外）
- *   - 配置包自身实际加载目录的扩展、技能、提示词与主题源码
- * 配置删除通过墓碑（tombstone）传播；包源码用 Git rebase 合并。
+ * 配置删除通过墓碑（tombstone）传播。
  * 冲突在交互模式弹窗选择，自动模式跳过并挂起。
  *
- * 工作流（v1.5 起，无启动/退出自动同步）：
- *   - 主力机改完配置/插件后主动 `/sync push`（或包装命令 `pi update --extensions`）推送。
+ * 架构（v2 起，双通道 + 单写者 + 服务端围栏）：
+ *   - 源码通道 = main 分支：只装引擎与包源码（extensions/scripts/skills/…），不含 config/。
+ *     GitHub ruleset 保护 main：禁止直推/强推/删除，只允许 PR。唯一写者 = 持 token 的主力机，
+ *     源码改动走 临时分支 → PR → API 自动合并。其他机器的包克隆永远干净、只 ff-pull，
+ *     因此 pi update --extensions 永远是纯快进——旧机器也会自动升级到新引擎（自愈死锁解开）。
+ *   - 配置通道 = sync 孤儿分支：只装 config/ + SYNC-PROTOCOL.json，所有机器可读写，
+ *     沿用三方合并/墓碑逻辑。工作克隆（~/.pi/sync-repo）只检出 sync 分支。
+ *   - 旧版客户端推 main 会被 ruleset 直接拒绝（响亮失败，不再静默回退源码）。
+ *
+ * 工作流（无启动/退出自动同步）：
+ *   - 主力机改完配置后 `/sync push`；改完源码后同样 /sync push（自动走 PR）。
  *   - 其他机装过一次本机入口（/sync install-update）后，只需 `pi update --extensions`：
- *     先完整同步（拉取→合并→落地→补装→卸载对账→推送），再调用真正的 pi 更新其余包。
- *   - 开关 pi 本身零同步动作；不再注册 session_start / session_shutdown 钩子。
+ *     先完整同步（拉取→合并→落地→补装→卸载对账→推送 sync 分支），再 ff 更新包源码与其余包。
+ *   - 同步失败不阻塞包更新（包装脚本 warn-and-continue）：源码通道必须永远可更新。
+ *   - 开关 pi 本身零同步动作；不注册 session_start / session_shutdown 钩子。
+ *   - 一次性迁移：主力机 /sync migrate-v2（播种 sync 分支 + main 移除 config/），
+ *     其他机器收敛后 /sync migrate-v2 --fence 启用 main 保护。
  *
  * 卸载对账（reconcileRemovedPackages）：pi 核心 `pi update --extensions` 只更新/补装清单内的包，
  *   不卸载已移除的包；本扩展在落地后按 accepted/墓碑候选精确卸载（npm uninstall / 删干净 git 克隆），
@@ -31,7 +42,11 @@
  *
  * CLI（非交互，供包装脚本调用）：node extensions/pi-sync.ts --run（或 env PI_SYNC_CLI=1）。
  *   复用 runSync 完整流程；ui=null，pending 冲突跳过，失败设 process.exitCode=1，绝不静默覆盖本机改动。
- *   配置包内未提交的源码修改由 syncSelfSource 自动 commit/rebase/push。
+ *   node extensions/pi-sync.ts migrate-v2 [--fence]：一次性迁移 / 单独启用 main 保护。
+ *   token 完全可选（~/.pi/agent/pi-sync-github-token，fine-grained PAT，仅本仓库：
+ *   Contents / Pull requests / Administration 读写）：有 → 源码 PR 自动合并、ruleset API 创建；
+ *   无 → 源码推分支后给 PR 链接手动合并（网页登录会话，零 PAT 依赖），ruleset 网页创建。
+ *   无 token 的消费机永不提交源码，本地改动备份到本地分支后重置包克隆到远端。
  *
  * 配置（~/.pi/agent/settings.json 的 "sync" 键，本键不参与同步）：
  *   { "sync": { "repo": "git@github.com:SomeTestZero/pi-yyp-config.git",
@@ -74,6 +89,13 @@ const REPO_MODELS = "config/pi/agent/models.json";
 const REPO_WEBSEARCH = "config/pi/web-search.json";
 const REPO_EXT_DIR = "config/pi/agent/extensions";
 const REPO_STATE = "config/sync-state.json";
+
+// v2 双通道：main = 源码（单写者，ruleset 保护）；sync 孤儿分支 = 配置数据（多写者）
+const SYNC_BRANCH = "sync";
+const PROTOCOL_FILE = "SYNC-PROTOCOL.json";
+const PROTOCOL_VERSION = 2;
+const TOKEN_FILE = "pi-sync-github-token";
+const RULESET_NAME = "pi-sync source protection";
 
 const LOCK_MAX_AGE_MS = 120_000;
 const FETCH_TIMEOUT_MS = 20_000;
@@ -573,14 +595,34 @@ async function postCloneFixup(): Promise<void> {
   await ensureIdentity();
 }
 
-/** 确保工作克隆存在；返回错误信息或 null */
+/** 确保工作克隆存在且位于 sync 配置分支；返回错误信息或 null（NO_SYNC_BRANCH = 主力机尚未迁移） */
 async function ensureClone(cfg: SyncConfig): Promise<string | null> {
-  if (fs.existsSync(path.join(workDir(), ".git"))) return null;
-  if (!cfg.repo) return "未配置同步仓库，请先运行 /sync init";
-  fs.mkdirSync(path.dirname(workDir()), { recursive: true });
-  const r = await run("git", ["clone", cfg.repo, workDir()], { timeout: CLONE_TIMEOUT_MS, env: GIT_ENV() });
-  if (r.code !== 0) return `克隆失败: ${r.stderr.trim() || r.stdout.trim()}`;
-  await postCloneFixup();
+  if (!fs.existsSync(path.join(workDir(), ".git"))) {
+    if (!cfg.repo) return "未配置同步仓库，请先运行 /sync init";
+    fs.mkdirSync(path.dirname(workDir()), { recursive: true });
+    const r = await run("git", ["clone", cfg.repo, workDir()], { timeout: CLONE_TIMEOUT_MS, env: GIT_ENV() });
+    if (r.code !== 0) return `克隆失败: ${r.stderr.trim() || r.stdout.trim()}`;
+    await postCloneFixup();
+  }
+  return ensureSyncBranch();
+}
+
+/**
+ * v2：工作克隆只承载 sync 孤儿分支上的配置数据。
+ * 旧版工作克隆（在 main、带本地配置提交）直接切到 origin/sync：
+ * 配置真相在 live 文件里，phase1 会重新导出，本地提交/未提交改动可安全丢弃。
+ */
+async function ensureSyncBranch(): Promise<string | null> {
+  if (!(await fetchRemote())) return "无法连接远端（离线？）";
+  if ((await git(["rev-parse", "--verify", `origin/${SYNC_BRANCH}`])).code !== 0) return "NO_SYNC_BRANCH";
+  const branch = await currentBranch();
+  if (branch !== SYNC_BRANCH) {
+    await git(["reset", "--hard", "HEAD"]);
+    await git(["clean", "-fd", "-e", "node_modules"]);
+    const co = await git(["checkout", "-B", SYNC_BRANCH, `origin/${SYNC_BRANCH}`]);
+    if (co.code !== 0) return `切换到 ${SYNC_BRANCH} 分支失败: ${co.stderr.trim().slice(0, 160)}`;
+    await git(["clean", "-fd", "-e", "node_modules"]);
+  }
   return null;
 }
 
@@ -641,12 +683,9 @@ async function commitIfDirty(message: string): Promise<boolean> {
  * 语义合并后创建真正的合并提交（把远端提交记为第二父提交）。
  * 即使内容无变化也必须建合并提交，否则双方历史永远分叉、push 永远 non-fast-forward。
  *
- * 非 config/ 的跟踪文件（包源码 extensions/、README、scripts 等）以远端 otherParent 为准：
- * 工作克隆只负责 config/ 的三方合并，其索引中的源码是克隆时的旧版本；若直接 write-tree，
- * 会把远端刚推送的源码更新覆盖回旧版（两克隆设计下源码被静默回退的根因）。
- * 故先 read-tree 远端整树，再把本地合并好的 config/ 覆盖进索引 →
- * merge 提交树 = 远端源码 + 合并后 config；reset --hard 同时把工作克隆源码刷新到远端最新。
- * config/ 的合并结果仍完全来自 phase2（语义不变）。
+ * v2：sync 分支上非 config/ 的文件只有 SYNC-PROTOCOL.json 等通道元数据，
+ * 以远端 otherParent 为准（read-tree 整树再覆盖合并好的 config/），
+ * 避免把远端刚推送的元数据覆盖回旧版。源码不再经过本通道（main 单写者 + ruleset）。
  */
 async function commitMerge(otherParent: string, message: string): Promise<void> {
   const rt = await git(["read-tree", otherParent]);
@@ -1589,7 +1628,8 @@ export async function reconcileRemovedPackages(cfg: SyncConfig, notes: string[],
 // ---------------------------------------------------------------------------
 
 const SELF_SOURCE_DIRS = ["extensions", "skills", "prompts", "themes", "scripts", "docs"];
-const SELF_SOURCE_FILES = ["README.md", "CHANGELOG.md", "package.json", "package-lock.json"];
+// package-lock.json 是本机 npm 产物，不参与源码同步（更新前丢弃本地改动）
+const SELF_SOURCE_FILES = ["README.md", "CHANGELOG.md", "package.json"];
 
 function selfPackageEntry(cfg: SyncConfig): unknown | undefined {
   const live = (readJson(liveSettingsPath()) ?? {}) as Side;
@@ -1668,80 +1708,368 @@ async function ensureSelfIdentity(dir: string): Promise<void> {
 }
 
 /**
- * 实际加载目录有改动时自动 commit，再 rebase 到远端最新状态。
- * 文件是否存在由 Git 祖先关系判断：新机器从未拥有该文件不等于用户删除。
- * 真正的内容冲突保留 rebase 现场，不 reset、不强推、不静默覆盖。
+ * v2 源码通道：包克隆永远干净、只 fast-forward main。
+ * - 持 token 的机器（主力机）：本地源码改动 → 临时分支 → PR → API 自动合并。
+ * - 无 token 的机器（消费机）：永不提交源码；本地改动备份到本地分支后重置。
+ * - 旧版遗留的本地提交（分叉历史）：备份分支 + reset --hard origin/main。
+ * 历史教训：旧版任意机器直推整树到 main，旧客户端合并时静默回退远端源码，
+ * 且引擎经被合并通道分发导致坏逻辑无法自愈。v2 用单写者 + 服务端围栏根治。
  */
 async function syncSelfSource(cfg: SyncConfig, result: RunResult, push: boolean): Promise<void> {
   const dir = selfSourceDir(cfg);
   if (!dir) return;
   const sourcePaths = selfSourcePaths(dir);
-  if (!sourcePaths.length) return;
   await ensureSelfIdentity(dir);
-
-  const dirty = await selfGit(dir, ["status", "--porcelain", "--", ...sourcePaths]);
-  if (dirty.code !== 0) {
-    result.errors.push(`配置包状态读取失败：${dirty.stderr.trim().slice(0, 120)}`);
-    return;
-  }
   const rebaseInProgress =
     fs.existsSync(path.join(dir, ".git", "rebase-merge")) || fs.existsSync(path.join(dir, ".git", "rebase-apply"));
   if (rebaseInProgress) {
     result.errors.push(`配置包源码有未解决的 rebase：请在 ${dir} 完成或中止后再 /sync`);
     return;
   }
-  if (dirty.stdout.trim()) {
-    await selfGit(dir, ["add", "-A", "--", ...sourcePaths]);
-    const commit = await selfGit(dir, ["commit", "-m", `pi-sync: update package from ${cfg.machineId}`]);
-    if (commit.code !== 0) {
-      result.errors.push(`配置包改动提交失败：${commit.stderr.trim().slice(0, 160)}`);
-      return;
-    }
-    result.notes.push("配置包源码已自动提交");
-  }
-
-  const upstreamStatus = await selfGit(dir, ["rev-parse", "--verify", "@{upstream}"]);
-  if (upstreamStatus.code !== 0) await selfGit(dir, ["branch", "--set-upstream-to", "origin/main"]);
-  const fetch = await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
+  const fetch = await selfGit(dir, ["fetch", "origin", "main"], FETCH_TIMEOUT_MS);
   if (fetch.code !== 0) {
     if (push) result.errors.push("配置包源码拉取失败，请联网后运行 /sync push");
     return;
   }
-  const branch = (await selfGit(dir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim() || "main";
-  const upstream = `origin/${branch}`;
-  if ((await selfGit(dir, ["rev-parse", "--verify", upstream])).code !== 0) return;
+  if ((await selfGit(dir, ["rev-parse", "--verify", "origin/main"])).code !== 0) return;
 
-  const incoming = parseInt((await selfGit(dir, ["rev-list", "--count", `HEAD..${upstream}`])).stdout.trim(), 10) || 0;
-  if (incoming > 0) {
-    const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", upstream], 120_000);
-    if (rebase.code !== 0) {
-      result.errors.push(`配置包源码有冲突：请在 ${dir} 完成 git rebase，再运行 /sync`);
+  // package-lock.json 是本机 npm 产物：丢弃本地改动，避免阻塞快进
+  const lockDirty = await selfGit(dir, ["status", "--porcelain", "--", "package-lock.json"]);
+  if (lockDirty.stdout.trim()) await selfGit(dir, ["checkout", "--", "package-lock.json"]);
+
+  const dirty = sourcePaths.length
+    ? await selfGit(dir, ["status", "--porcelain", "--", ...sourcePaths])
+    : { code: 0, stdout: "", stderr: "" };
+  if (dirty.code !== 0) {
+    result.errors.push(`配置包状态读取失败：${dirty.stderr.trim().slice(0, 120)}`);
+    return;
+  }
+  const token = readGithubToken();
+  if (dirty.stdout.trim()) {
+    if (token && push) {
+      await pushSourceViaPR(cfg, dir, sourcePaths, result);
+    } else {
+      // 消费机（或 pull-only）：备份本地源码改动到本地分支，永不推送
+      const backup = `local-src-backup/${cfg.machineId}-${Date.now()}`.replace(/[^A-Za-z0-9._/-]/g, "-");
+      await selfGit(dir, ["checkout", "-b", backup]);
+      await selfGit(dir, ["add", "-A", "--", ...sourcePaths]);
+      await selfGit(dir, ["commit", "-m", `pi-sync: backup local source edits (${cfg.machineId})`]);
+      await selfGit(dir, ["checkout", "main"]);
+      result.notes.push(`本地源码改动已备份到分支 ${backup}（本机未配置 GitHub token，不推送源码）`);
+    }
+  }
+
+  const branch = (await selfGit(dir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim();
+  if (branch !== "main") {
+    const co = await selfGit(dir, ["checkout", "main"]);
+    if (co.code !== 0) {
+      result.errors.push(`配置包切换到 main 失败：${co.stderr.trim().slice(0, 120)}`);
+      return;
+    }
+  }
+  const head = (await selfGit(dir, ["rev-parse", "HEAD"])).stdout.trim();
+  const remoteHead = (await selfGit(dir, ["rev-parse", "origin/main"])).stdout.trim();
+  if (head === remoteHead) return;
+  if ((await selfGit(dir, ["merge-base", "--is-ancestor", "HEAD", "origin/main"])).code === 0) {
+    const ff = await selfGit(dir, ["merge", "--ff-only", "origin/main"]);
+    if (ff.code !== 0) {
+      result.errors.push(`配置包源码快进失败：${ff.stderr.trim().slice(0, 160)}`);
       return;
     }
     result.notes.push("配置包源码已更新");
     result.changedLocal = true;
+    return;
+  }
+  // 旧版遗留分叉：备份后重置（源码单写者，消费机不应有本地提交）
+  const backup = `legacy-backup/${cfg.machineId}-${Date.now()}`.replace(/[^A-Za-z0-9._/-]/g, "-");
+  await selfGit(dir, ["branch", backup]);
+  const reset = await selfGit(dir, ["reset", "--hard", "origin/main"]);
+  if (reset.code !== 0) {
+    result.errors.push(`配置包重置失败：${reset.stderr.trim().slice(0, 160)}`);
+    return;
+  }
+  result.notes.push(`配置包旧版本地提交已备份到 ${backup}，已重置到远端（v2 源码单写者）`);
+  result.changedLocal = true;
+}
+
+// ---------------------------------------------------------------------------
+// GitHub API（源码 PR 流 / ruleset 围栏）
+// ---------------------------------------------------------------------------
+
+function readGithubToken(): string | null {
+  try {
+    const t = fs.readFileSync(path.join(agentDir(), TOKEN_FILE), "utf8").trim();
+    return t || null;
+  } catch {
+    return null;
+  }
+}
+
+function ghRepoSlug(repoUrl: string): string | null {
+  const m = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(repoUrl.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+async function ghApi(token: string, method: string, apiPath: string, body?: unknown): Promise<{ status: number; json: any }> {
+  const res = await fetch(`https://api.github.com${apiPath}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "pi-sync",
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  let json: any = null;
+  try { json = await res.json(); } catch {}
+  return { status: res.status, json };
+}
+
+/**
+ * 主力机源码推送：临时分支 → rebase origin/main → push 分支 → PR → API 自动合并 →
+ * 本地 main 快进到远端。失败保留分支/PR 现场，绝不直推 main。
+ */
+async function pushSourceViaPR(cfg: SyncConfig, dir: string, sourcePaths: string[], result: RunResult): Promise<void> {
+  const token = readGithubToken();
+  const slug = ghRepoSlug(cfg.repo ?? "");
+  if (!slug) {
+    result.errors.push("源码有改动但无法解析 GitHub 仓库地址，未推送");
+    return;
+  }
+  const branch = `src/${cfg.machineId}-${Date.now()}`.replace(/[^A-Za-z0-9._/-]/g, "-");
+  const co = await selfGit(dir, ["checkout", "-b", branch]);
+  if (co.code !== 0) {
+    result.errors.push(`创建源码分支失败：${co.stderr.trim().slice(0, 160)}`);
+    return;
+  }
+  await selfGit(dir, ["add", "-A", "--", ...sourcePaths]);
+  const commit = await selfGit(dir, ["commit", "-m", `pi-sync: source update from ${cfg.machineId}`]);
+  if (commit.code !== 0) {
+    await selfGit(dir, ["checkout", "main"]);
+    result.errors.push(`源码改动提交失败：${commit.stderr.trim().slice(0, 160)}`);
+    return;
+  }
+  const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", "origin/main"], 120_000);
+  if (rebase.code !== 0) {
+    await selfGit(dir, ["rebase", "--abort"]);
+    await selfGit(dir, ["checkout", "main"]);
+    result.errors.push(`源码 rebase 冲突：改动已保留在分支 ${branch}，请手动处理后提 PR`);
+    return;
+  }
+  const pushed = await selfGit(dir, ["push", "origin", branch], PUSH_TIMEOUT_MS);
+  if (pushed.code !== 0) {
+    await selfGit(dir, ["checkout", "main"]);
+    result.errors.push(`源码分支推送失败：${pushed.stderr.trim().slice(0, 160)}`);
+    return;
+  }
+  if (!token) {
+    // 零 token 模式：分支已推，网页手动建 PR + 合并（登录会话，无需 PAT）
+    await selfGit(dir, ["checkout", "main"]);
+    result.notes.push(`源码分支 ${branch} 已推送，请创建并合并 PR：https://github.com/${slug}/compare/main...${branch}?expand=1 （合并后下次同步自动快进）`);
+    return;
+  }
+  const pr = await ghApi(token, "POST", `/repos/${slug}/pulls`, {
+    title: `pi-sync: source update from ${cfg.machineId}`,
+    head: branch,
+    base: "main",
+    body: "pi-sync v2 自动创建（源码单写者通道）。",
+  });
+  if (pr.status !== 201 || !pr.json?.number) {
+    await selfGit(dir, ["checkout", "main"]);
+    result.errors.push(`PR 创建失败（HTTP ${pr.status}）：${JSON.stringify(pr.json?.errors ?? pr.json?.message ?? "").slice(0, 160)}；分支 ${branch} 已推送`);
+    return;
+  }
+  const num = pr.json.number as number;
+  const merge = await ghApi(token, "PUT", `/repos/${slug}/pulls/${num}/merge`, { merge_method: "merge" });
+  if (merge.status !== 200 || !merge.json?.merged) {
+    await selfGit(dir, ["checkout", "main"]);
+    result.errors.push(`PR 自动合并失败（HTTP ${merge.status}）：${pr.json.html_url} ；请手动合并`);
+    return;
+  }
+  await selfGit(dir, ["checkout", "main"]);
+  await selfGit(dir, ["fetch", "origin", "main"], FETCH_TIMEOUT_MS);
+  await selfGit(dir, ["reset", "--hard", "origin/main"]);
+  await selfGit(dir, ["branch", "-D", branch]);
+  await selfGit(dir, ["push", "origin", "--delete", branch], PUSH_TIMEOUT_MS);
+  result.pushed = true;
+  result.notes.push(`源码已经 PR #${num} 推送并合并`);
+}
+
+async function mainRulesetActive(token: string, slug: string): Promise<boolean> {
+  const list = await ghApi(token, "GET", `/repos/${slug}/rulesets`);
+  if (!Array.isArray(list.json)) return false;
+  return list.json.some((x: any) => x?.name === RULESET_NAME && x?.enforcement === "active");
+}
+
+/** main 围栏：禁止直推/强推/删除，只允许 PR（无 bypass，旧客户端同账号也推不动）。 */
+async function createMainRuleset(token: string, slug: string): Promise<{ ok: boolean; message: string }> {
+  const body = {
+    name: RULESET_NAME,
+    target: "branch",
+    enforcement: "active",
+    conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
+    rules: [
+      { type: "deletion" },
+      { type: "non_fast_forward" },
+      {
+        type: "pull_request",
+        parameters: {
+          required_approving_review_count: 0,
+          dismiss_stale_reviews_on_push: false,
+          require_code_owner_review: false,
+          require_last_push_approval: false,
+          required_review_thread_resolution: false,
+          allowed_merge_methods: ["merge", "squash", "rebase"],
+        },
+      },
+    ],
+  };
+  const r = await ghApi(token, "POST", `/repos/${slug}/rulesets`, body);
+  if (r.status === 201) return { ok: true, message: "main ruleset 已创建（禁止直推/强推/删除，只允许 PR）" };
+  if (r.status === 422 && (await mainRulesetActive(token, slug))) return { ok: true, message: "main ruleset 已存在" };
+  return { ok: false, message: `ruleset 创建失败（HTTP ${r.status}）：${JSON.stringify(r.json?.message ?? r.json ?? "").slice(0, 200)}` };
+}
+
+/**
+ * 一次性迁移（主力机，需 token）：
+ * 1. 播种 sync 孤儿分支（当前 config/ + 协议标记）并推送
+ * 2. main 源码提交（v2 引擎 + 移除 config/）：围栏未启用时直推，已启用时走 PR
+ * 3. 工作克隆切到 sync 分支
+ * --fence：单独创建/确认 main ruleset（建议其他机器收敛后再启用）。
+ * 其他机器无需手动干预：pi update 快进到新引擎后自动切换配置通道。
+ */
+export async function performMigrateV2(ui: UiLike | null, fenceOnly: boolean): Promise<{ ok: boolean; message: string }> {
+  const cfg = loadConfig();
+  if (!cfg.repo) return { ok: false, message: "未配置同步仓库" };
+  const token = readGithubToken(); // 可选：有则 API 自动建 ruleset/PR，无则纯 SSH + 网页手动
+  const slug = ghRepoSlug(cfg.repo);
+  if (!slug) return { ok: false, message: `无法解析 GitHub 仓库地址：${cfg.repo}` };
+  const log = (m: string): void => {
+    if (ui) ui.notify(m, "info");
+    else console.log(`[pi-sync] ${m}`);
+  };
+
+  if (fenceOnly) {
+    if (!token) {
+      return { ok: true, message: `请在网页创建 ruleset：https://github.com/${slug}/settings/rules → New branch ruleset：Target branches 选 main；勾选 Require a pull request before merging（Required approvals 设 0）、Block force pushes、Restrict deletions；Bypass list 留空。或配置 ${TOKEN_FILE} 后重跑本命令自动创建` };
+    }
+    const r = await createMainRuleset(token, slug);
+    return { ok: r.ok, message: r.message };
   }
 
-  const outgoing = parseInt((await selfGit(dir, ["rev-list", "--count", `${upstream}..HEAD`])).stdout.trim(), 10) || 0;
-  if (outgoing === 0) return;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const pushed = await selfGit(dir, ["push", "origin", `HEAD:${branch}`], PUSH_TIMEOUT_MS);
-    if (pushed.code === 0) {
-      result.pushed = true;
-      result.notes.push("配置包源码已推送");
-      return;
-    }
-    if (!/non-fast-forward|fetch first|rejected|stale/i.test(pushed.stderr) || attempt === 2) {
-      result.errors.push(`配置包源码推送失败：${pushed.stderr.trim().slice(0, 160)}`);
-      return;
-    }
-    await selfGit(dir, ["fetch", "origin"], FETCH_TIMEOUT_MS);
-    const rebase = await selfGit(dir, ["-c", "core.editor=true", "rebase", upstream], 120_000);
-    if (rebase.code !== 0) {
-      result.errors.push(`配置包源码有冲突：请在 ${dir} 完成 git rebase，再运行 /sync`);
-      return;
-    }
+  // 工作克隆
+  if (!fs.existsSync(path.join(workDir(), ".git"))) {
+    fs.mkdirSync(path.dirname(workDir()), { recursive: true });
+    const r = await run("git", ["clone", cfg.repo, workDir()], { timeout: CLONE_TIMEOUT_MS, env: GIT_ENV() });
+    if (r.code !== 0) return { ok: false, message: `克隆失败: ${r.stderr.trim() || r.stdout.trim()}` };
+    await postCloneFixup();
   }
+  await git(["fetch", "origin"], { timeout: FETCH_TIMEOUT_MS });
+
+  // 播种前先用 live 文件刷新工作克隆 config/，避免播下陈旧配置
+  const seedState = (readJson(path.join(workDir(), REPO_STATE)) as SyncState | null) ?? emptyState();
+  phase1(cfg, seedState, loadPending());
+  writeJson(path.join(workDir(), REPO_STATE), seedState);
+  await commitIfDirty(`pi-sync: refresh before v2 seed (${cfg.machineId})`);
+
+  // 1. 播种 sync 分支
+  if ((await git(["rev-parse", "--verify", `origin/${SYNC_BRANCH}`])).code !== 0) {
+    writeJson(path.join(workDir(), PROTOCOL_FILE), { version: PROTOCOL_VERSION, seededBy: cfg.machineId, seededAt: new Date().toISOString() });
+    if ((await git(["rev-parse", "--verify", SYNC_BRANCH])).code === 0) await git(["branch", "-D", SYNC_BRANCH]);
+    const co = await git(["checkout", "--orphan", SYNC_BRANCH]);
+    if (co.code !== 0) return { ok: false, message: `创建孤儿分支失败: ${co.stderr.trim().slice(0, 160)}` };
+    await git(["rm", "-rf", "--cached", "."]);
+    await git(["add", "-A", "--", "config", PROTOCOL_FILE]);
+    const cm = await git(["commit", "-m", "pi-sync: seed config channel (v2)"]);
+    if (cm.code !== 0) return { ok: false, message: `播种提交失败: ${cm.stderr.trim().slice(0, 160)}` };
+    const push = await git(["push", "-u", "origin", SYNC_BRANCH], { timeout: PUSH_TIMEOUT_MS });
+    if (push.code !== 0) return { ok: false, message: `sync 分支推送失败: ${push.stderr.trim().slice(0, 200)}` };
+    await git(["clean", "-fd", "-e", "node_modules"]);
+    log("sync 配置分支已创建并推送");
+  } else {
+    await git(["reset", "--hard", "HEAD"]);
+    await git(["clean", "-fd", "-e", "node_modules"]);
+    const co = await git(["checkout", "-B", SYNC_BRANCH, `origin/${SYNC_BRANCH}`]);
+    if (co.code !== 0) return { ok: false, message: `切换 sync 分支失败: ${co.stderr.trim().slice(0, 160)}` };
+    log("sync 分支已存在，工作克隆已切换");
+  }
+
+  // 2. main 源码：v2 引擎 + 移除 config/
+  const dir = selfSourceDir(cfg);
+  if (!dir) return { ok: false, message: "找不到配置包安装目录" };
+  await ensureSelfIdentity(dir);
+  await selfGit(dir, ["fetch", "origin", "main"], FETCH_TIMEOUT_MS);
+  const lockDirty = await selfGit(dir, ["status", "--porcelain", "--", "package-lock.json"]);
+  if (lockDirty.stdout.trim()) await selfGit(dir, ["checkout", "--", "package-lock.json"]);
+  const curBranch = (await selfGit(dir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim();
+  if (curBranch !== "main") {
+    const co = await selfGit(dir, ["checkout", "main"]);
+    if (co.code !== 0) return { ok: false, message: `配置包切换 main 失败: ${co.stderr.trim().slice(0, 160)}` };
+  }
+  const hasConfig = fs.existsSync(path.join(dir, "config"));
+  const sourcePaths = selfSourcePaths(dir);
+  const dirty = sourcePaths.length
+    ? await selfGit(dir, ["status", "--porcelain", "--", ...sourcePaths])
+    : { code: 0, stdout: "", stderr: "" };
+  if (hasConfig || dirty.stdout.trim()) {
+    const tmp = `src/migrate-v2-${Date.now()}`;
+    const co = await selfGit(dir, ["checkout", "-b", tmp]);
+    if (co.code !== 0) return { ok: false, message: `创建迁移分支失败: ${co.stderr.trim().slice(0, 160)}` };
+    if (hasConfig) await selfGit(dir, ["rm", "-r", "--quiet", "config"]);
+    if (sourcePaths.length) await selfGit(dir, ["add", "-A", "--", ...sourcePaths]);
+    const cm = await selfGit(dir, ["commit", "-m", "pi-sync v2: config channel moved to sync branch; main is source-only"]);
+    if (cm.code !== 0) {
+      await selfGit(dir, ["checkout", "main"]);
+      return { ok: false, message: `源码提交失败: ${cm.stderr.trim().slice(0, 160)}` };
+    }
+    const rb = await selfGit(dir, ["-c", "core.editor=true", "rebase", "origin/main"], 120_000);
+    if (rb.code !== 0) {
+      await selfGit(dir, ["rebase", "--abort"]);
+      await selfGit(dir, ["checkout", "main"]);
+      return { ok: false, message: "源码 rebase 冲突，请手动处理后重跑 migrate-v2" };
+    }
+    const fenced = token ? await mainRulesetActive(token, slug) : false;
+    if (!fenced) {
+      const p = await selfGit(dir, ["push", "origin", `${tmp}:main`], PUSH_TIMEOUT_MS);
+      if (p.code !== 0) {
+        if (/protected branch|pull request|ruleset|GH006|GH013/i.test(p.stderr)) {
+          // 围栏已生效（网页手动建过）：改走分支 + 手动 PR
+          const pb = await selfGit(dir, ["push", "origin", tmp], PUSH_TIMEOUT_MS);
+          await selfGit(dir, ["checkout", "main"]);
+          if (pb.code === 0) {
+            return { ok: false, message: `main 已受保护，请合并 PR 后重跑 migrate-v2：https://github.com/${slug}/compare/main...${tmp}?expand=1` };
+          }
+        }
+        await selfGit(dir, ["checkout", "main"]);
+        return { ok: false, message: `源码推送失败: ${p.stderr.trim().slice(0, 200)}` };
+      }
+    } else {
+      const p = await selfGit(dir, ["push", "origin", tmp], PUSH_TIMEOUT_MS);
+      if (p.code !== 0) {
+        await selfGit(dir, ["checkout", "main"]);
+        return { ok: false, message: `迁移分支推送失败: ${p.stderr.trim().slice(0, 200)}` };
+      }
+      const pr = await ghApi(token, "POST", `/repos/${slug}/pulls`, { title: "pi-sync v2 migration", head: tmp, base: "main" });
+      if (pr.status !== 201 || !pr.json?.number) {
+        await selfGit(dir, ["checkout", "main"]);
+        return { ok: false, message: `PR 创建失败（HTTP ${pr.status}）` };
+      }
+      const mg = await ghApi(token, "PUT", `/repos/${slug}/pulls/${pr.json.number}/merge`, { merge_method: "merge" });
+      if (mg.status !== 200 || !mg.json?.merged) {
+        await selfGit(dir, ["checkout", "main"]);
+        return { ok: false, message: `PR 合并失败：${pr.json.html_url}` };
+      }
+    }
+    await selfGit(dir, ["checkout", "main"]);
+    await selfGit(dir, ["fetch", "origin", "main"], FETCH_TIMEOUT_MS);
+    await selfGit(dir, ["reset", "--hard", "origin/main"]);
+    await selfGit(dir, ["branch", "-D", tmp]);
+    if (fenced) await selfGit(dir, ["push", "origin", "--delete", tmp], PUSH_TIMEOUT_MS);
+    log("main 源码已更新（config/ 已移除）");
+  }
+  return { ok: true, message: "迁移完成：sync 配置通道就绪，其他机器 pi update 后自动收敛；确认收敛后运行 migrate-v2 --fence 启用 main 保护" };
 }
 
 // ---------------------------------------------------------------------------
@@ -1813,6 +2141,13 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
   try {
     startLockHeartbeat();
     const cloneErr = await ensureClone(cfg);
+    if (cloneErr === "NO_SYNC_BRANCH") {
+      // 主力机尚未迁移：配置通道暂不可用，但源码通道必须保持可更新（旧机器收敛的生命线）
+      result.notes.push("配置通道尚未迁移（主力机运行 /sync migrate-v2 后自动启用），本次仅更新包源码");
+      await syncSelfSource(cfg, result, opts.push);
+      result.ok = result.errors.length === 0;
+      return result;
+    }
     if (cloneErr) {
       result.errors.push(cloneErr);
       return result;
@@ -1830,6 +2165,12 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
     // phase2：远端 -> 工作克隆
     const ref = await remoteRef();
     if (ref && (await fetchRemote())) {
+      const proto = await jsonAt(ref, PROTOCOL_FILE);
+      const protoVersion = typeof proto?.version === "number" ? (proto.version as number) : PROTOCOL_VERSION;
+      if (protoVersion > PROTOCOL_VERSION) {
+        result.errors.push(`配置通道协议 v${protoVersion} 新于本机 v${PROTOCOL_VERSION}，请先升级 pi-sync（pi update --extensions）`);
+        return result;
+      }
       const ahead = await revListCount(`HEAD..${ref}`);
       if (ahead > 0) {
         const p2 = await phase2(cfg, ref, ui, opts.interactive, pending);
@@ -1971,8 +2312,7 @@ export async function runSync(ui: UiLike | null, opts: RunOptions): Promise<RunR
       }
     }
 
-    // 包源码必须最后同步：phase2/commitMerge 会对同一远端工作副本 reset --hard。
-    // 若提前推送，旧工作副本会把刚合并的扩展再次覆盖（WorkBuddy 回退的根因）。
+    // 包源码最后同步（v2：包克隆只 ff-pull main；主力机源码改动走 PR）
     await syncSelfSource(cfg, result, opts.push);
 
     savePending(pending);
@@ -2001,6 +2341,9 @@ export async function performInit(
   const r = await run("git", ["clone", repoUrl, workDir()], { timeout: CLONE_TIMEOUT_MS, env: GIT_ENV() });
   if (r.code !== 0) return { ok: false, message: `克隆失败: ${r.stderr.trim() || r.stdout.trim()}` };
   await postCloneFixup();
+  // v2：工作克隆切到 sync 配置分支（未迁移时留在 main，兼容旧远端）
+  const sw = await ensureSyncBranch();
+  if (sw && sw !== "NO_SYNC_BRANCH") return { ok: false, message: sw };
 
   // 写入本机 sync 配置（sync 键被排除，不会参与同步）
   const liveP = liveSettingsPath();
@@ -2331,7 +2674,7 @@ async function statusText(cfg: SyncConfig): Promise<string> {
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("sync", {
     description:
-      "多机配置同步：/sync [push|pull|status|on|off|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
+      "多机配置同步：/sync [push|pull|status|on|off|install-update|migrate-v2 [--fence]]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>（同步内网镜像）",
     handler: async (args, ctx) => {
       const ui: UiLike = ctx.ui;
       const [sub, ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
@@ -2387,6 +2730,14 @@ export default function (pi: ExtensionAPI) {
         live.sync = sync;
         writeJson(liveP, live);
         ui.notify(`pi-sync 已${sub === "on" ? "开启" : "关闭"}（由 /sync 或 pi update --extensions 手动触发；开关 pi 不再自动同步）`, "info");
+        return;
+      }
+
+      if (sub === "migrate-v2") {
+        const fenceOnly = rest.includes("--fence");
+        ui.notify(fenceOnly ? "pi-sync：启用 main 源码保护（ruleset）…" : "pi-sync：开始 v2 迁移（播种 sync 配置分支 + main 源码清理）…", "info");
+        const r = await performMigrateV2(ctx.hasUI ? ui : null, fenceOnly);
+        ui.notify(r.ok ? `pi-sync：${r.message}` : `pi-sync 迁移失败：${r.message}`, r.ok ? "info" : "error");
         return;
       }
 
@@ -2476,7 +2827,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       ui.notify(
-        "用法: /sync [push|pull|status|on|off|install-update]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
+        "用法: /sync [push|pull|status|on|off|install-update|migrate-v2 [--fence]]、/sync init [repo] [--mode=remote|local]、/sync lan <ssh主机>|off",
         "warning",
       );
     },
@@ -2492,6 +2843,12 @@ export default function (pi: ExtensionAPI) {
 
 async function cliMain(): Promise<void> {
   const log = (msg: string): void => console.log(`[pi-sync] ${msg}`);
+  if (process.argv.includes("migrate-v2")) {
+    const r = await performMigrateV2(null, process.argv.includes("--fence"));
+    console.log(`[pi-sync] ${r.message}`);
+    if (!r.ok) process.exitCode = 1;
+    return;
+  }
   const cfg = loadConfig();
   if (!cfg.enabled) {
     log("sync.enabled=false，跳过同步");
@@ -2522,5 +2879,5 @@ async function cliMain(): Promise<void> {
 const invokedDirectly =
   typeof process.argv[1] === "string" &&
   path.basename(process.argv[1]) === "pi-sync.ts" &&
-  (process.argv.includes("--run") || process.env.PI_SYNC_CLI === "1");
+  (process.argv.includes("--run") || process.argv.includes("migrate-v2") || process.env.PI_SYNC_CLI === "1");
 if (invokedDirectly) void cliMain();

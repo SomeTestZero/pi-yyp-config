@@ -2,8 +2,13 @@
 /**
  * pi-sync 的独立 CLI / 安装器。
  *
- * sync：在真正的 `pi update --extensions` 前调用，完整同步配置与包源码。
+ * sync：在真正的 `pi update --extensions` 前调用，完整同步配置（sync 分支）与包源码（main ff）。
  * install：在 ~/.pi/agent/bin 安装薄包装，配置 shell/PowerShell 命令优先级。
+ * migrate-v2 [--fence]：一次性迁移到双通道架构 / 单独启用 main 保护。
+ *
+ * v2（2026-11-19）：同步失败不再阻塞包更新（warn-and-continue）——源码通道必须永远可更新，
+ * 这是旧机器自动收敛到新引擎的生命线；旧版 `sync || exit` 会在 main 被 ruleset 保护后
+ * 把旧引擎机器锁死在「同步失败→不更新→永远旧」的死循环里。
  *
  * 包装不修改 pi 安装目录；真实入口与同步核心位置保存在本机 JSON 中。
  *
@@ -97,16 +102,29 @@ function normalizeGitRemotes() {
   return fixed;
 }
 
-export async function runSync() {
+function engineModulePath() {
   const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
   const modulePath = config.syncModule || join(packageDir, "extensions", "pi-sync.ts");
   if (!existsSync(modulePath)) throw new Error(`找不到同步核心：${modulePath}`);
+  return modulePath;
+}
+
+export async function runSync() {
+  const modulePath = engineModulePath();
   try {
     normalizeGitRemotes();
   } catch (error) {
     console.error(`pi-sync: 远端地址修正跳过：${error instanceof Error ? error.message : String(error)}`);
   }
   return run(process.execPath, ["--disable-warning=ExperimentalWarning", modulePath, "--run"], {
+    env: { ...process.env, PI_SYNC_CLI: "1" },
+  });
+}
+
+async function runMigrateV2(args) {
+  const allowed = args.filter((a) => a === "--fence");
+  if (allowed.length !== args.length) throw new Error("migrate-v2 只接受 --fence 参数");
+  return run(process.execPath, ["--disable-warning=ExperimentalWarning", engineModulePath(), "migrate-v2", ...allowed], {
     env: { ...process.env, PI_SYNC_CLI: "1" },
   });
 }
@@ -384,7 +402,9 @@ pi_sync_script=${syncScript}
 
 if [ "$1" = "update" ] && [ "$2" = "--extensions" ] && [ "$#" -eq 2 ]; then
   if [ -x "$pi_sync_node" ]; then
-    "$pi_sync_node" "$pi_sync_script" sync || exit $?
+    if ! "$pi_sync_node" "$pi_sync_script" sync; then
+      printf 'pi-yyp-config: 同步失败，继续更新扩展（源码通道必须永远可更新；请排查上方错误）\\n' >&2
+    fi
   else
     printf 'pi-yyp-config: 跳过同步（找不到 %s），继续更新扩展\\n' "$pi_sync_node" >&2
   fi
@@ -445,7 +465,7 @@ async function installWindows(corePath) {
 function pi {
     if ($args.Count -eq 2 -and $args[0] -eq 'update' -and $args[1] -eq '--extensions') {
         & ${psQuote(process.execPath)} ${psQuote(corePath)} sync
-        if ($LASTEXITCODE -ne 0) { return }
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'pi-yyp-config: 同步失败，继续更新扩展（源码通道必须永远可更新；请排查上方错误）' }
     }
     & ${psQuote(realCmd)} @args
 }
@@ -464,6 +484,8 @@ try {
   if (command === "sync") {
     if (args.length) throw new Error("sync 不接受额外参数");
     process.exitCode = await runSync();
+  } else if (command === "migrate-v2") {
+    process.exitCode = await runMigrateV2(args);
   } else if (command === "install") {
     if (args.length) throw new Error("install 不接受额外参数");
     if (process.platform === "win32") await installWindows(fileURLToPath(import.meta.url));
@@ -472,7 +494,7 @@ try {
     if (args.length) throw new Error("fix-remotes 不接受额外参数");
     normalizeGitRemotes();
   } else {
-    console.log("用法: node scripts/pi-sync-cli.mjs <sync|install|fix-remotes>");
+    console.log("用法: node scripts/pi-sync-cli.mjs <sync|install|fix-remotes|migrate-v2 [--fence]>");
     process.exitCode = command ? 1 : 0;
   }
 } catch (error) {
